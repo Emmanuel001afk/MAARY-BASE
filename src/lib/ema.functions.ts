@@ -45,15 +45,15 @@ export const saveSettings = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { encryptSecret } = await import("./crypto.server");
     const { supabase, userId } = context;
-    const patch: Record<string, unknown> = {
+    const patch = {
       user_id: userId,
       ai_base_url: data.ai_base_url,
       ai_model: data.ai_model,
       agent_url: data.agent_url,
       agent_token: data.agent_token,
       updated_at: new Date().toISOString(),
+      ...(data.ai_key ? { ai_key_encrypted: await encryptSecret(data.ai_key) } : {}),
     };
-    if (data.ai_key) patch["ai_key_encrypted"] = await encryptSecret(data.ai_key);
     const { error } = await supabase.from("app_settings").upsert(patch, { onConflict: "user_id" });
     if (error) throw new Error(error.message);
     return { ok: true };
@@ -75,7 +75,7 @@ export const saveCredential = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { encryptSecret } = await import("./crypto.server");
     const { supabase, userId } = context;
-    const row: Record<string, unknown> = {
+    const row = {
       user_id: userId,
       site: data.site.trim().toLowerCase(),
       label: data.label,
@@ -83,8 +83,8 @@ export const saveCredential = createServerFn({ method: "POST" })
       notes: data.notes,
       allow_ai: data.allow_ai,
       updated_at: new Date().toISOString(),
+      ...(data.secret ? { secret_encrypted: await encryptSecret(data.secret) } : {}),
     };
-    if (data.secret) row["secret_encrypted"] = await encryptSecret(data.secret);
     if (data.id) {
       const { error } = await supabase
         .from("vault_credentials")
@@ -94,7 +94,9 @@ export const saveCredential = createServerFn({ method: "POST" })
       if (error) throw new Error(error.message);
     } else {
       if (!data.secret) throw new Error("A secret is required for a new credential");
-      const { error } = await supabase.from("vault_credentials").insert(row);
+      const { error } = await supabase
+        .from("vault_credentials")
+        .insert({ ...row, secret_encrypted: await encryptSecret(data.secret) });
       if (error) throw new Error(error.message);
     }
     return { ok: true };

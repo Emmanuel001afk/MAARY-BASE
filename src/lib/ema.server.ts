@@ -1,9 +1,15 @@
 import { decryptSecret } from "./crypto.server";
 
+export type ToolCall = {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+};
+
 export type ChatMessage = {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
-  tool_calls?: unknown;
+  tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
 };
@@ -36,10 +42,12 @@ export async function callOpenAICompatible(args: {
   if (!res.ok) {
     throw new Error(`AI provider error ${res.status}: ${text.slice(0, 500)}`);
   }
-  const json = JSON.parse(text) as {
-    choices?: { message?: ChatMessage & { tool_calls?: unknown } }[];
-  };
+  const json = JSON.parse(text) as { choices?: { message?: ChatMessage }[] };
   const message = json.choices?.[0]?.message;
   if (!message) throw new Error("AI provider returned no message");
-  return message;
+  return {
+    role: "assistant" as const,
+    content: message.content ?? null,
+    tool_calls: message.tool_calls ?? [],
+  };
 }
