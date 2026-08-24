@@ -15,16 +15,16 @@ function toB64(bytes: Uint8Array): string {
   return btoa(s);
 }
 
-function fromB64(value: string): Uint8Array {
+function fromB64(value: string): Uint8Array<ArrayBuffer> {
   const bin = atob(value);
-  const out = new Uint8Array(bin.length);
+  const out = new Uint8Array(new ArrayBuffer(bin.length));
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
 
 export async function encryptSecret(plain: string): Promise<string> {
   const key = await getKey();
-  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const iv = crypto.getRandomValues(new Uint8Array(new ArrayBuffer(12)));
   const cipher = new Uint8Array(
     await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(plain)),
   );
