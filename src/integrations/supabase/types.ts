@@ -14,7 +14,192 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      activity_log: {
+        Row: {
+          action: string
+          actor: string
+          created_at: string
+          details: Json
+          id: string
+          kind: string
+          status: string
+          tab_id: string | null
+          url: string | null
+          user_id: string
+        }
+        Insert: {
+          action: string
+          actor?: string
+          created_at?: string
+          details?: Json
+          id?: string
+          kind?: string
+          status?: string
+          tab_id?: string | null
+          url?: string | null
+          user_id: string
+        }
+        Update: {
+          action?: string
+          actor?: string
+          created_at?: string
+          details?: Json
+          id?: string
+          kind?: string
+          status?: string
+          tab_id?: string | null
+          url?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      ai_memory: {
+        Row: {
+          content: string
+          created_at: string
+          id: string
+          scope: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          id?: string
+          scope?: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: string
+          scope?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      app_settings: {
+        Row: {
+          agent_token: string | null
+          agent_url: string
+          ai_base_url: string
+          ai_key_encrypted: string | null
+          ai_model: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          agent_token?: string | null
+          agent_url?: string
+          ai_base_url?: string
+          ai_key_encrypted?: string | null
+          ai_model?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          agent_token?: string | null
+          agent_url?: string
+          ai_base_url?: string
+          ai_key_encrypted?: string | null
+          ai_model?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      approvals: {
+        Row: {
+          created_at: string
+          decided_at: string | null
+          id: string
+          payload: Json
+          risk: string
+          status: string
+          summary: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          decided_at?: string | null
+          id?: string
+          payload?: Json
+          risk?: string
+          status?: string
+          summary: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          decided_at?: string | null
+          id?: string
+          payload?: Json
+          risk?: string
+          status?: string
+          summary?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          created_at: string
+          display_name: string | null
+          email: string
+          id: string
+        }
+        Insert: {
+          created_at?: string
+          display_name?: string | null
+          email: string
+          id: string
+        }
+        Update: {
+          created_at?: string
+          display_name?: string | null
+          email?: string
+          id?: string
+        }
+        Relationships: []
+      }
+      vault_credentials: {
+        Row: {
+          allow_ai: boolean
+          created_at: string
+          id: string
+          label: string | null
+          notes: string | null
+          secret_encrypted: string
+          site: string
+          updated_at: string
+          user_id: string
+          username: string | null
+        }
+        Insert: {
+          allow_ai?: boolean
+          created_at?: string
+          id?: string
+          label?: string | null
+          notes?: string | null
+          secret_encrypted: string
+          site: string
+          updated_at?: string
+          user_id: string
+          username?: string | null
+        }
+        Update: {
+          allow_ai?: boolean
+          created_at?: string
+          id?: string
+          label?: string | null
+          notes?: string | null
+          secret_encrypted?: string
+          site?: string
+          updated_at?: string
+          user_id?: string
+          username?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
