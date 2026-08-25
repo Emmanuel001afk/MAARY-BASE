@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 import { AgentClient, type AgentStatus, type Frame, type TabInfo } from "./agent-client";
 import { AI_TOOLS, systemPrompt } from "./ai-tools";
 import { aiChat, getSettings, revealCredential } from "./ema.functions";
@@ -63,7 +64,7 @@ export function useEma(userId: string) {
         url: entry.url ?? null,
         tab_id: activeTabId,
         status: entry.status ?? "ok",
-        details: entry.details ?? {},
+        details: (entry.details ?? {}) as Json,
       };
       const { data } = await supabase.from("activity_log").insert(row).select().single();
       if (data) setLog((prev) => [data as LogRow, ...prev].slice(0, 300));
@@ -217,7 +218,7 @@ export function useEma(userId: string) {
         const details = String(args["details"] ?? "");
         const { data: row } = await supabase
           .from("approvals")
-          .insert({ user_id: userId, summary, payload: { details } })
+          .insert({ user_id: userId, summary, payload: { details } as Json })
           .select()
           .single();
         const approved = await askApproval(summary, details);
@@ -297,7 +298,7 @@ export function useEma(userId: string) {
         historyRef.current = [
           sys,
           ...historyRef.current.filter((m) => m.role !== "system"),
-          { role: "user", content: prompt },
+          { role: "user" as const, content: prompt },
         ].slice(-40);
 
         for (let step = 0; step < 25; step++) {
