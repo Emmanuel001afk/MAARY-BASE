@@ -5,6 +5,7 @@ import { KeyRound, Plug, Settings2, Loader2, LogOut } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useEma } from "@/lib/use-ema";
+import { createOwnerAccount } from "@/lib/ema.functions";
 import { BrowserStage } from "@/components/ema/BrowserStage";
 import { AiPanel } from "@/components/ema/AiPanel";
 import { ActivityLog } from "@/components/ema/ActivityLog";
@@ -77,6 +78,19 @@ function OwnerLogin() {
     if (error) toast.error(error.message);
   }
 
+  async function bootstrap() {
+    setBusy(true);
+    try {
+      await createOwnerAccount({ data: { email, password } });
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw new Error(error.message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not create the account");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
       <div className="panel w-full max-w-sm p-6">
@@ -101,6 +115,13 @@ function OwnerLogin() {
           <Button type="submit" className="w-full" disabled={busy}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : "Sign in"}
           </Button>
+          <button
+            type="button"
+            onClick={bootstrap}
+            className="w-full text-center text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+          >
+            First time here? Create the owner account
+          </button>
         </form>
       </div>
     </main>

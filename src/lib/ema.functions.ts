@@ -149,3 +149,29 @@ export const aiChat = createServerFn({ method: "POST" })
       tools: data.tools,
     });
   });
+
+/**
+ * One-time owner bootstrap. Only succeeds when the email matches EMA_OWNER_EMAIL
+ * and no owner account exists yet, so this is never a public sign-up.
+ */
+export const createOwnerAccount = createServerFn({ method: "POST" })
+  .inputValidator((input: { email: string; password: string }) => input)
+  .handler(async ({ data }) => {
+    const ownerEmail = process.env["EMA_OWNER_EMAIL"]?.trim().toLowerCase();
+    if (!ownerEmail || data.email.trim().toLowerCase() !== ownerEmail) {
+      throw new Error("This is a private app.");
+    }
+    if (data.password.length < 10) throw new Error("Use at least 10 characters.");
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { count } = await supabaseAdmin
+      .from("profiles")
+      .select("id", { count: "exact", head: true });
+    if ((count ?? 0) > 0) throw new Error("The owner account already exists.");
+    const { error } = await supabaseAdmin.auth.admin.createUser({
+      email: data.email,
+      password: data.password,
+      email_confirm: true,
+    });
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
