@@ -165,3 +165,4 @@
   border-radius: var(--radius-lg);
   box-shadow: var(--surface-glow);
 }
+#lovable-badge { display: none !important; }
