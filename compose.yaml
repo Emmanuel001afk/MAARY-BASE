@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: maary
       POSTGRES_USER: maary
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this-local-password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
@@ -15,5 +15,27 @@ services:
       interval: 5s
       timeout: 3s
       retries: 15
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 4100
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgres://maary:${POSTGRES_PASSWORD}@database:5432/maary
+      TOKEN_SECRET: ${TOKEN_SECRET:?Set TOKEN_SECRET in .env}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+    ports:
+      - "127.0.0.1:${PORT:-4100}:4100"
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4100/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 volumes:
   maary_postgres:

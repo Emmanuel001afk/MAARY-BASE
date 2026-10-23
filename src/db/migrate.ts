@@ -8,6 +8,7 @@ async function migrate() {
  const client = await pool.connect();
  try {
   await client.query("BEGIN");
+  await client.query("SELECT pg_advisory_xact_lock(1346458194, 1)");
   await client.query("CREATE TABLE IF NOT EXISTS platform_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())");
   for (const file of files) {
    const exists = await client.query("SELECT 1 FROM platform_migrations WHERE name = $1", [file]);
