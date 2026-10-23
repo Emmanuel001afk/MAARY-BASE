@@ -3,17 +3,43 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: maary
-      POSTGRES_USER: maary
+      POSTGRES_DB: ${POSTGRES_DB:-maary}
+      POSTGRES_USER: ${POSTGRES_USER:-maary}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this-local-password}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - maary_postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U maary -d maary"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-maary} -d ${POSTGRES_DB:-maary}"]
       interval: 5s
       timeout: 3s
       retries: 15
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      HOST: 0.0.0.0
+      PORT: 4100
+      DATABASE_URL: postgres://${POSTGRES_USER:-maary}:${POSTGRES_PASSWORD:-change-this-local-password}@database:5432/${POSTGRES_DB:-maary}
+      JWT_SECRET: ${JWT_SECRET:-change-this-production-jwt-secret-min-32-chars}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-change-this-production-encryption-key-32-chars}
+      STORAGE_DIR: /app/storage
+      BACKUP_DIR: /app/data/backups
+      AUTO_MIGRATE: "true"
+      WORKER_ENABLED: "true"
+    ports:
+      - "${PORT:-4100}:4100"
+    volumes:
+      - maary_storage:/app/storage
+      - maary_data:/app/data
+
 volumes:
   maary_postgres:
+  maary_storage:
+  maary_data:

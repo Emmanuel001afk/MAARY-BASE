@@ -1,0 +1,22 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.marrybase.platform"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.marrybase.platform"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+}

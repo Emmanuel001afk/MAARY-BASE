@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="MARRY BASE Logo">
+  <title>MARRY BASE Official Logo</title>
+  <defs>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981" />
+      <stop offset="100%" stop-color="#06b6d4" />
+    </linearGradient>
+    <linearGradient id="leftCyl" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+    <linearGradient id="rightCyl" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#22d3ee" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="#0b0f17" />
+  <path d="M128 24 L216 60 L216 132 C216 186 178 220 128 236 C78 220 40 186 40 132 L40 60 Z" fill="#111827" stroke="url(#shieldGrad)" stroke-width="8" />
+  <ellipse cx="88" cy="84" rx="26" ry="12" fill="url(#leftCyl)" />
+  <path d="M62 102 C62 109 74 114 88 114 C102 114 114 109 114 102 L114 122 C114 129 102 134 88 134 C74 134 62 129 62 122 Z" fill="url(#leftCyl)" />
+  <path d="M62 140 C62 147 74 152 88 152 C102 152 114 147 114 140 L114 164 C114 171 102 176 88 176 C74 176 62 171 62 164 Z" fill="url(#leftCyl)" />
+  <ellipse cx="168" cy="84" rx="26" ry="12" fill="url(#rightCyl)" />
+  <path d="M142 102 C142 109 154 114 168 114 C182 114 194 109 194 102 L194 122 C194 129 182 134 168 134 C154 134 142 129 142 122 Z" fill="url(#rightCyl)" />
+  <path d="M142 140 C142 147 154 152 168 152 C182 152 194 147 194 140 L194 164 C194 171 182 176 168 176 C154 176 142 171 142 164 Z" fill="url(#rightCyl)" />
+  <path d="M80 84 L128 136 L176 84" fill="none" stroke="url(#shieldGrad)" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
