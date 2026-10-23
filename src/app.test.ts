@@ -27,11 +27,8 @@ test("health and readiness endpoints return operational status and MARRY BASE pl
     assert.equal(platformBody.database.engine, "PostgreSQL");
     assert.equal(platformBody.branding.logoPngUrl, "/v1/platform/logo");
     assert.equal(platformBody.branding.logoSvgUrl, "/v1/platform/logo.svg");
-    assert.equal(
-      platformBody.branding.apkDownloadUrl,
-      "/v1/platform/apk/download"
-    );
-    assert.equal(platformBody.modules.mobileApkBuilder, "operational");
+    assert.equal(platformBody.branding.apkDownloadUrl, undefined);
+    assert.equal(platformBody.modules.mobileApkBuilder, "unavailable");
 
     const metricsJsonRes = await app.inject({
       method: "GET",
@@ -95,42 +92,23 @@ test("dashboard routes serve MARRY BASE management interface, logo, and assets",
   }
 });
 
-test("APK builder initiates, builds, signs, and serves the MARRY BASE Android APK", async () => {
+test("APK endpoints fail closed until a real Android build pipeline exists", async () => {
   const app = await buildApp();
   try {
     const buildRes = await app.inject({
       method: "POST",
       url: "/v1/platform/apk/build",
-      payload: {
-        versionName: "1.0.0",
-        versionCode: 1,
-      },
+      payload: { versionName: "1.0.0", versionCode: 1 },
     });
-    assert.equal(buildRes.statusCode, 201);
-    const buildBody = buildRes.json();
-    assert.equal(buildBody.apk.platformName, "MARRY BASE");
-    assert.equal(buildBody.apk.packageName, "com.marrybase.platform");
-    assert.equal(buildBody.apk.fileName, "marry-base.apk");
-    assert.ok(buildBody.apk.sizeBytes > 10000);
-    assert.ok(buildBody.apk.entries.includes("AndroidManifest.xml"));
-    assert.ok(buildBody.apk.entries.includes("classes.dex"));
-    assert.ok(buildBody.apk.entries.includes("res/drawable/logo.png"));
-    assert.ok(buildBody.apk.entries.includes("META-INF/MARRYBAS.RSA"));
+    assert.equal(buildRes.statusCode, 501);
+    assert.equal(buildRes.json().error, "not_implemented");
 
-    const dlRes = await app.inject({
+    const downloadRes = await app.inject({
       method: "GET",
       url: "/v1/platform/apk/download",
     });
-    assert.equal(dlRes.statusCode, 200);
-    assert.match(
-      dlRes.headers["content-type"] ?? "",
-      /application\/vnd\.android\.package-archive/
-    );
-    // ZIP/APK local file header magic bytes PK\x03\x04
-    assert.equal(dlRes.rawPayload[0], 0x50);
-    assert.equal(dlRes.rawPayload[1], 0x4b);
-    assert.equal(dlRes.rawPayload[2], 0x03);
-    assert.equal(dlRes.rawPayload[3], 0x04);
+    assert.equal(downloadRes.statusCode, 501);
+    assert.equal(downloadRes.json().error, "not_implemented");
   } finally {
     await app.close();
   }
