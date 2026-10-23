@@ -1,4 +1,4 @@
-import { pool } from "../db/pool.js";
+import { pool, withTransaction } from "../db/pool.js";
 import {
   generateRandomToken,
   hashPassword,
@@ -51,28 +51,34 @@ export async function registerPlatformUser(input: {
     throw new ValidationError("Password must be at least 8 characters long.");
   }
 
-  const existing = await pool.query(
-    "SELECT id FROM platform_users WHERE email = $1",
-    [email]
-  );
-  if (existing.rowCount && existing.rowCount > 0) {
-    throw new ConflictError("A platform account with this email already exists.");
-  }
-
-  // First registered user on the platform becomes superadmin automatically
-  const countRes = await pool.query<{ count: string }>(
-    "SELECT COUNT(*)::text AS count FROM platform_users"
-  );
-  const isFirstUser = Number(countRes.rows[0]?.count ?? 0) === 0;
-
   const passwordHash = await hashPassword(input.password);
-  const insertRes = await pool.query<PlatformUser>(
-    `INSERT INTO platform_users (email, password_hash, name, is_superadmin, status, last_login_at)
-     VALUES ($1, $2, $3, $4, 'active', now())
-     RETURNING id, email, name, is_superadmin, status, last_login_at, created_at, updated_at`,
-    [email, passwordHash, (input.name ?? "").trim() || email.split("@")[0]!, isFirstUser]
-  );
-  const user = insertRes.rows[0]!;
+
+  // Serialize first-account bootstrap across concurrent registrations. The lock
+  // and insert share one transaction so only one account can become superadmin.
+  const user = await withTransaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock($1, $2)", [1977001, 1]);
+
+    const existing = await client.query(
+      "SELECT id FROM platform_users WHERE email = $1",
+      [email]
+    );
+    if (existing.rowCount && existing.rowCount > 0) {
+      throw new ConflictError("A platform account with this email already exists.");
+    }
+
+    const countRes = await client.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM platform_users"
+    );
+    const isFirstUser = Number(countRes.rows[0]?.count ?? 0) === 0;
+
+    const insertRes = await client.query<PlatformUser>(
+      `INSERT INTO platform_users (email, password_hash, name, is_superadmin, status, last_login_at)
+       VALUES ($1, $2, $3, $4, 'active', now())
+       RETURNING id, email, name, is_superadmin, status, last_login_at, created_at, updated_at`,
+      [email, passwordHash, (input.name ?? "").trim() || email.split("@")[0]!, isFirstUser]
+    );
+    return insertRes.rows[0]!;
+  });
 
   await recordAuditEvent({
     actorType: "user",
