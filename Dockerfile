@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
 COPY tsconfig.json ./
+COPY assets ./assets
 COPY src ./src
 RUN npm run build
 
@@ -13,10 +14,12 @@ ENV PORT=4100
 WORKDIR /app
 COPY --from=build /app/package.json ./
 RUN npm install --omit=dev
+COPY --from=build /app/assets ./assets
+COPY --from=build /app/releases ./releases
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/src/db/migrations ./dist/db/migrations
 COPY --from=build /app/src/db/migrations ./src/db/migrations
-RUN mkdir -p /app/data /app/storage /app/data/backups && chown -R node:node /app
+RUN mkdir -p /app/data /app/storage /app/data/backups /app/releases && chown -R node:node /app
 USER node
 VOLUME ["/app/data", "/app/storage"]
 EXPOSE 4100

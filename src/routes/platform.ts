@@ -1,9 +1,18 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getMigrationStatus } from "../db/migrate.js";
 import { pool } from "../db/pool.js";
 import { ValidationError } from "../lib/errors.js";
-import { requirePlatformUser } from "../middleware/auth.middleware.js";
+import {
+  optionalPlatformUser,
+  requirePlatformUser,
+} from "../middleware/auth.middleware.js";
+import {
+  buildMarryBaseApk,
+  getOrBuildDefaultApk,
+} from "../services/apk.service.js";
 import { listAuditEvents } from "../services/audit.service.js";
 import {
   createDatabaseBackup,
@@ -51,9 +60,15 @@ export async function registerPlatformRoutes(
     }
 
     return {
-      name: "MAARY BASE",
+      name: "MARRY BASE",
+      aliases: ["MAARY BASE"],
       version: "1.0.0",
       status: "operational",
+      branding: {
+        logoPngUrl: "/v1/platform/logo",
+        logoSvgUrl: "/v1/platform/logo.svg",
+        apkDownloadUrl: "/v1/platform/apk/download",
+      },
       database: {
         engine: "PostgreSQL",
         mode: poolStats.mode,
@@ -73,8 +88,68 @@ export async function registerPlatformRoutes(
         backupsAndRecovery: "operational",
         administrationDashboard: "operational",
         cliAndSdk: "operational",
+        mobileApkBuilder: "operational",
       },
     };
+  });
+
+  // Platform Logo Endpoints
+  app.get("/v1/platform/logo", async (_request, reply) => {
+    const logoPath = resolve(process.cwd(), "assets", "logo.png");
+    const buf = await readFile(logoPath);
+    return reply.header("content-type", "image/png").send(buf);
+  });
+
+  app.get("/v1/platform/logo.svg", async (_request, reply) => {
+    const svgPath = resolve(process.cwd(), "assets", "logo.svg");
+    const buf = await readFile(svgPath);
+    return reply.header("content-type", "image/svg+xml").send(buf);
+  });
+
+  // APK Build & Download Endpoints
+  app.post("/v1/platform/apk/build", async (request, reply) => {
+    const user = await optionalPlatformUser(request);
+    const body = (request.body ?? {}) as {
+      projectSlug?: string;
+      serverUrl?: string;
+      versionName?: string;
+      versionCode?: number;
+    };
+    const apk = await buildMarryBaseApk({
+      projectSlug: body.projectSlug,
+      serverUrl: body.serverUrl,
+      versionName: body.versionName,
+      versionCode: body.versionCode,
+      actorId: user?.id ?? null,
+    });
+    return reply.code(201).send({
+      apk: {
+        ...apk,
+        downloadUrl: `/v1/platform/apk/download${apk.projectSlug ? `?projectSlug=${encodeURIComponent(apk.projectSlug)}` : ""}`,
+      },
+    });
+  });
+
+  app.get("/v1/platform/apk/download", async (request, reply) => {
+    const q = (request.query ?? {}) as { projectSlug?: string };
+    if (q.projectSlug) {
+      const info = await buildMarryBaseApk({ projectSlug: q.projectSlug });
+      const buf = await readFile(info.filePath);
+      return reply
+        .header("content-type", "application/vnd.android.package-archive")
+        .header(
+          "content-disposition",
+          `attachment; filename="${info.fileName}"`
+        )
+        .header("x-apk-sha256", info.checksumSha256)
+        .send(buf);
+    }
+    const { info, buffer } = await getOrBuildDefaultApk();
+    return reply
+      .header("content-type", "application/vnd.android.package-archive")
+      .header("content-disposition", `attachment; filename="${info.fileName}"`)
+      .header("x-apk-sha256", info.checksumSha256)
+      .send(buffer);
   });
 
   // Platform Operator Auth
@@ -185,21 +260,15 @@ export async function registerPlatformRoutes(
     return reply.code(201).send({ backup });
   });
 
-  app.post(
-    "/v1/platform/backups/:backupId/verify",
-    async (request) => {
-      await requirePlatformUser(request);
-      const { backupId } = request.params as { backupId: string };
-      return verifyBackupIntegrity(backupId);
-    }
-  );
+  app.post("/v1/platform/backups/:backupId/verify", async (request) => {
+    await requirePlatformUser(request);
+    const { backupId } = request.params as { backupId: string };
+    return verifyBackupIntegrity(backupId);
+  });
 
-  app.post(
-    "/v1/platform/backups/:backupId/restore",
-    async (request) => {
-      const user = await requirePlatformUser(request);
-      const { backupId } = request.params as { backupId: string };
-      return restoreDatabaseBackup(backupId, { actorId: user.id });
-    }
-  );
+  app.post("/v1/platform/backups/:backupId/restore", async (request) => {
+    const user = await requirePlatformUser(request);
+    const { backupId } = request.params as { backupId: string };
+    return restoreDatabaseBackup(backupId, { actorId: user.id });
+  });
 }

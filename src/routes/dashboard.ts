@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import type { FastifyInstance } from "fastify";
 
 const DASHBOARD_CSS = `
@@ -233,15 +235,18 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MAARY BASE — Platform Management Studio</title>
+  <title>MARRY BASE — Platform Management Studio</title>
+  <link rel="icon" type="image/png" href="/v1/platform/logo" />
   <link rel="stylesheet" href="/dashboard/styles.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="brand-badge">MAARY BASE</span>
+      <img src="/v1/platform/logo" alt="MARRY BASE Logo" style="width:32px;height:32px;border-radius:6px;border:1px solid rgba(16,185,129,0.5);" />
+      <span class="brand-badge">MARRY BASE</span>
       <span>Backend Platform Studio</span>
       <span id="health-pill" class="badge badge-green">Checking...</span>
+      <a href="/v1/platform/apk/download" class="btn btn-secondary" style="text-decoration:none;padding:4px 10px;font-size:12px;">Download Android APK</a>
     </div>
     <div id="topbar-authenticated" class="topbar-controls hidden">
       <select id="project-select" style="width: 220px;" title="Select active project"></select>
@@ -253,7 +258,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
   <div id="auth-view" class="auth-container hidden">
     <div class="card">
-      <h2 id="auth-title">Sign in to MAARY BASE Control Plane</h2>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+        <img src="/v1/platform/logo" alt="MARRY BASE Logo" style="width:48px;height:48px;border-radius:10px;border:1px solid rgba(16,185,129,0.5);" />
+        <h2 id="auth-title" style="margin-bottom:0;">Sign in to MARRY BASE Control Plane</h2>
+      </div>
       <p style="color: var(--text-muted); margin-bottom: 14px; font-size: 13px;">
         First registered operator automatically receives platform superadmin privileges.
       </p>
@@ -1541,5 +1549,17 @@ export async function registerDashboardRoutes(
     return reply
       .header("content-type", "application/javascript; charset=utf-8")
       .send(DASHBOARD_JS);
+  });
+
+  app.get("/dashboard/logo.png", async (_request, reply) => {
+    const logoPath = resolve(process.cwd(), "assets", "logo.png");
+    const buf = await readFile(logoPath);
+    return reply.header("content-type", "image/png").send(buf);
+  });
+
+  app.get("/dashboard/logo.svg", async (_request, reply) => {
+    const svgPath = resolve(process.cwd(), "assets", "logo.svg");
+    const buf = await readFile(svgPath);
+    return reply.header("content-type", "image/svg+xml").send(buf);
   });
 }

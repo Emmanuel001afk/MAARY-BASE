@@ -1,6 +1,10 @@
-# MAARY BASE
+# MARRY BASE
 
-MAARY BASE is an independent, self-hostable, general-purpose backend platform built on PostgreSQL and TypeScript/Fastify. It provides an integrated control plane, multi-project schema and role isolation, native PostgreSQL Row-Level Security (RLS), authentication and identity management, auto-generated REST and RPC Data APIs, object storage, WebSocket realtime subscriptions, isolated server functions, background job queues, logical backups and restoration, a web management studio, a CLI, and a TypeScript SDK.
+<p align="center">
+  <img src="assets/logo.png" alt="MARRY BASE Official Logo" width="180" />
+</p>
+
+**MARRY BASE** (also aliased as `MAARY BASE`) is an independent, self-hostable, general-purpose backend platform built on PostgreSQL and TypeScript/Fastify. It provides an integrated control plane, multi-project schema and role isolation, native PostgreSQL Row-Level Security (RLS), authentication and identity management, auto-generated REST and RPC Data APIs, object storage, WebSocket realtime subscriptions, isolated server functions, background job queues, logical backups and restoration, a web management studio, a CLI, a TypeScript SDK, and an integrated **Android `.apk` builder & packager**.
 
 ---
 
@@ -16,7 +20,8 @@ MAARY BASE is an independent, self-hostable, general-purpose backend platform bu
 | **Object Storage** | Operational | Public & private buckets, bucket access policies (`path_prefix`, `allow_owner_only`, role checks), MIME validation, file-size limits, storage quotas, SHA-256 checksums, HMAC signed download/upload URLs, multipart resumable uploads, abandoned upload cleanup. |
 | **Realtime Services** | Operational | Authenticated WebSocket server (`/v1/projects/:ref/realtime/ws`), automatic PostgreSQL row-change capture via `SECURITY DEFINER` triggers (`INSERT`, `UPDATE`, `DELETE`), channel broadcast, presence tracking, reconnection event replay via `lastEventId`. |
 | **Server Functions & Jobs** | Operational | Versioned JS functions executed in a sandboxed `node:vm` runtime with CPU timeouts, console log capture, encrypted secret injection, and project-scoped DB bridge; durable PostgreSQL background job queue with retries, exponential backoff, dead-letter state, idempotency keys, and recurring schedules. |
-| **Management Studio, CLI & SDK** | Operational | Interactive browser dashboard (`/` and `/dashboard`), CLI (`npm run cli -- ...`), and fluent TypeScript SDK (`createMaaryClient`). |
+| **Management Studio, CLI & SDK** | Operational | Interactive browser dashboard (`/` and `/dashboard`) branded with the official MARRY BASE logo, CLI (`npm run cli -- ...`), and fluent TypeScript SDK (`createMaaryClient`). |
+| **Android APK Builder & Mobile** | Operational | Built-in Android `.apk` packager & RSA v1 JAR signer (`releases/marry-base.apk`), native Android project source (`android/`), CLI builder (`npm run build:apk`), and REST endpoints (`POST /v1/platform/apk/build`, `GET /v1/platform/apk/download`). |
 | **Operations & Backups** | Operational | `/health`, `/ready`, `/v1/metrics` (JSON & Prometheus format), logical project/platform backups with SHA-256 integrity verification and transactional restoration. |
 
 ---
