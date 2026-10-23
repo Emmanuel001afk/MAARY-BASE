@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: ["main"]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -31,14 +34,21 @@ jobs:
       - name: Run adversarial & integration test suites
         run: npm test
 
-      - name: Upload MARRY BASE Android APK & App Icon Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: marry-base-release-artifacts
-          path: |
-            releases/marry-base.apk
-            assets/logo.png
-            assets/app-icon.png
-            assets/logo.svg
-            assets/app-icon.svg
-          if-no-files-found: error
+      - name: Verify MARRY BASE Android APK & App Icon Artifacts
+        run: |
+          test -s releases/marry-base.apk
+          test -s assets/logo.png
+          test -s assets/app-icon.png
+          test -s assets/logo.svg
+          test -s assets/app-icon.svg
+          {
+            echo "## MARRY BASE Verified Build Artifacts"
+            echo ""
+            echo "| Artifact | Size (Bytes) | SHA-256 Checksum |"
+            echo "| :--- | ---: | :--- |"
+            for f in releases/marry-base.apk assets/logo.png assets/app-icon.png assets/logo.svg assets/app-icon.svg; do
+              size=$(wc -c < "$f" | tr -d ' ')
+              sha=$(sha256sum "$f" | awk '{print $1}')
+              echo "| \`$f\` | $size | \`$sha\` |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
