@@ -2,7 +2,6 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { getMigrationStatus, runMigrations } from "../db/migrate.js";
 import { closeDatabase, pool } from "../db/pool.js";
-import { buildMarryBaseApk } from "../services/apk.service.js";
 import {
   createDatabaseBackup,
   listDatabaseBackups,
@@ -52,7 +51,6 @@ export async function runCli(argv: string[]): Promise<{
           "secrets set <projectSlug> <NAME> <VALUE> | secrets list <projectSlug>",
           "functions deploy <projectSlug> <fnSlug> <codeOrFile> | functions invoke <projectSlug> <fnSlug> [jsonBody]",
           "backup create [projectSlug] | backup list [projectSlug] | backup verify <backupId> | backup restore <backupId>",
-          "apk build [projectSlug] [serverUrl]",
         ],
       },
     };
@@ -266,16 +264,6 @@ export async function runCli(argv: string[]): Promise<{
       const res = await restoreDatabaseBackup(backupId);
       return { exitCode: 0, output: res };
     }
-  }
-
-  if (group === "apk" || group === "apk:build") {
-    const projectSlug = subcommand === "build" ? rest[0] : subcommand;
-    const serverUrl = subcommand === "build" ? rest[1] : rest[0];
-    const apk = await buildMarryBaseApk({
-      projectSlug: projectSlug || undefined,
-      serverUrl: serverUrl || undefined,
-    });
-    return { exitCode: 0, output: { status: "apk_built", apk } };
   }
 
   throw new Error(`Unknown CLI command '${group} ${subcommand ?? ""}'.`);
