@@ -52,6 +52,12 @@ const schema = z.object({
     ),
   MAX_UPLOAD_BYTES: z.coerce.number().int().min(1024).default(52_428_800),
   FUNCTION_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(5_000),
+  // The in-process Node VM is only permitted in tests. It is not a security
+  // boundary for untrusted code and must not be enabled in production.
+  FUNCTIONS_ALLOW_UNSAFE_VM: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined ? isTestRunner : v === "true" || v === "1")),
   WORKER_ENABLED: z
     .string()
     .optional()
@@ -87,6 +93,11 @@ if (!parsed.success) {
 }
 
 if (parsed.data.NODE_ENV === "production") {
+  if (parsed.data.FUNCTIONS_ALLOW_UNSAFE_VM) {
+    throw new Error(
+      "Unsafe configuration: FUNCTIONS_ALLOW_UNSAFE_VM cannot be enabled in production; use an isolated function runner."
+    );
+  }
   if (parsed.data.JWT_SECRET.includes("maary-base-dev-jwt-secret")) {
     throw new Error(
       "Unsafe configuration: JWT_SECRET must be explicitly set in production."
