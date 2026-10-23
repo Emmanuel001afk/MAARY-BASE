@@ -212,6 +212,12 @@ export async function invokeServerFunction(
   durationMs: number;
   error?: string;
 }> {
+  if (!config.FUNCTIONS_ALLOW_UNSAFE_VM) {
+    throw new ForbiddenError(
+      "Server-function execution is disabled: the in-process Node VM is not a security boundary. Configure an isolated function runner before enabling execution."
+    );
+  }
+
   const fn = await getServerFunctionBySlug(project.id, slug);
   if (fn.status !== "active") {
     throw new ForbiddenError(`Server function '${slug}' is currently disabled.`);
