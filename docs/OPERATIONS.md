@@ -20,20 +20,24 @@ Required and optional environment variables (validated at startup in `src/config
   - External PostgreSQL: `postgres://user:pass@host:5432/maary`
   - Embedded persistent PostgreSQL: `pglite://./data/postgres`
   - Embedded in-memory PostgreSQL: `pglite://memory`
-- `JWT_SECRET`: Secret key for signing HS256 JWTs and storage tokens (minimum 16 chars; production startup fails if left at development default).
-- `ENCRYPTION_KEY`: Master key for AES-256-GCM encryption of project secrets and stored API keys (production startup fails if left at development default).
+- `JWT_SECRET`: Unique secret for signing HS256 JWTs and storage tokens (minimum 32 characters; production startup rejects the built-in development default).
+- `ENCRYPTION_KEY`: Unique master key for AES-256-GCM encryption of project secrets and stored API keys (production startup rejects the built-in development default).
+- `PLATFORM_BOOTSTRAP_TOKEN`: Unique one-time setup credential required in production to create the initial platform superadmin. Send it as `x-platform-bootstrap-token` on the first platform registration only; it is not needed for later ordinary platform accounts.
+- `TRUST_PROXY`: Defaults to `false`. Set `true` only when the API is reachable exclusively through a trusted reverse proxy that overwrites forwarded headers.
 - `STORAGE_DIR`: Local object storage directory (`./storage` default).
 - `BACKUP_DIR`: Directory for logical backup snapshots (`./data/backups` default).
 - `STATEMENT_TIMEOUT_MS`: Per-query PostgreSQL statement timeout (`15000` ms default).
 - `MAX_QUERY_ROWS`: Maximum rows returned per query (`1000` default).
 - `FUNCTION_TIMEOUT_MS`: Hard execution timeout cap for server functions (`5000` ms default).
 
+Generate fresh values for production secrets (for example, `openssl rand -hex 32`) and keep them outside source control. Set `NODE_ENV=production` before exposing the service. In development/test mode the first registered account can bootstrap the local platform; production requires the bootstrap header above. Public platform registration must still be rate-limited and should be closed or constrained by an operator policy where open account creation is not desired.
+
 ---
 
 ## 3. Health, Readiness & Observability
 
 - **Liveness (`GET /health`)**: Returns `200 OK` if the Node.js HTTP server is responsive.
-- **Readiness (`GET /ready`)**: Executes `SELECT 1` against PostgreSQL, checks platform migration status, and verifies write permissions on `STORAGE_DIR`. Returns `503 Service Unavailable` if PostgreSQL or storage is unavailable.
+- **Readiness (`GET /ready`)**: Executes `SELECT 1` against PostgreSQL, checks that platform migrations are current, and verifies write permissions on `STORAGE_DIR`. Returns `503 Service Unavailable` if PostgreSQL, migrations, or storage are not ready.
 - **Metrics (`GET /v1/metrics` or `GET /v1/metrics?format=prometheus`)**: Exposes process uptime, RSS/heap memory, database query counters, active project counts, storage bytes/objects, realtime WebSocket connection counts, and job queue counts by status.
 
 ---

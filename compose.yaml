@@ -23,18 +23,20 @@ services:
       database:
         condition: service_healthy
     environment:
-      NODE_ENV: ${NODE_ENV:-production}
+      NODE_ENV: ${NODE_ENV:-development}
       HOST: 0.0.0.0
       PORT: 4100
       DATABASE_URL: postgres://${POSTGRES_USER:-maary}:${POSTGRES_PASSWORD:-change-this-local-password}@database:5432/${POSTGRES_DB:-maary}
-      JWT_SECRET: ${JWT_SECRET:-change-this-production-jwt-secret-min-32-chars}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-change-this-production-encryption-key-32-chars}
+      JWT_SECRET: ${JWT_SECRET:-maary-base-dev-jwt-secret-change-in-production-0123456789}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-maary-base-dev-encryption-master-key-change-in-prod-32b}
+      PLATFORM_BOOTSTRAP_TOKEN: ${PLATFORM_BOOTSTRAP_TOKEN:-maary-base-dev-bootstrap-token-change-in-production-0123456789}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
       STORAGE_DIR: /app/storage
       BACKUP_DIR: /app/data/backups
       AUTO_MIGRATE: "true"
       WORKER_ENABLED: "true"
     ports:
-      - "${PORT:-4100}:4100"
+      - "127.0.0.1:${PORT:-4100}:4100"
     volumes:
       - maary_storage:/app/storage
       - maary_data:/app/data

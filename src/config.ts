@@ -33,8 +33,16 @@ const schema = z.object({
   CORS_ORIGIN: z.string().default("*"),
   JWT_SECRET: z
     .string()
-    .min(16)
+    .min(32)
     .default("maary-base-dev-jwt-secret-change-in-production-0123456789"),
+  PLATFORM_BOOTSTRAP_TOKEN: z
+    .string()
+    .min(32)
+    .default("maary-base-dev-bootstrap-token-change-in-production-0123456789"),
+  TRUST_PROXY: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
   ENCRYPTION_KEY: z
     .string()
     .min(16)
@@ -95,6 +103,11 @@ if (parsed.data.NODE_ENV === "production") {
   if (parsed.data.ENCRYPTION_KEY.includes("maary-base-dev-encryption-master-key")) {
     throw new Error(
       "Unsafe configuration: ENCRYPTION_KEY must be explicitly set in production."
+    );
+  }
+  if (parsed.data.PLATFORM_BOOTSTRAP_TOKEN.includes("maary-base-dev-bootstrap-token")) {
+    throw new Error(
+      "Unsafe configuration: PLATFORM_BOOTSTRAP_TOKEN must be explicitly set in production."
     );
   }
 }

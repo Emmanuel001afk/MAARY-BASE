@@ -50,7 +50,9 @@ export async function registerHealthRoutes(
     }
 
     const isReady =
-      dependencies.postgres === "ok" && dependencies.storage === "ok";
+      dependencies.postgres === "ok" &&
+      dependencies.migrations === "ok" &&
+      dependencies.storage === "ok";
 
     if (!isReady) {
       return reply.code(503).send({

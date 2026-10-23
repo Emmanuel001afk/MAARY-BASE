@@ -1,4 +1,6 @@
-import { pool } from "../db/pool.js";
+import { timingSafeEqual } from "node:crypto";
+import { config } from "../config.js";
+import { pool, withTransaction, type DatabaseClient } from "../db/pool.js";
 import {
   generateRandomToken,
   hashPassword,
@@ -33,8 +35,25 @@ export interface PlatformAuthResult {
   expiresIn: number;
 }
 
-const PLATFORM_ACCESS_TTL_SECONDS = 3600 * 8; // 8 hours
+const PLATFORM_ACCESS_TTL_SECONDS = 15 * 60; // 15 minutes
 const PLATFORM_REFRESH_TTL_SECONDS = 3600 * 24 * 30; // 30 days
+const dummyPasswordHash = hashPassword("nonexistent-platform-user-password");
+
+function secretsEqual(candidate: string | undefined, expected: string): boolean {
+  if (!candidate) return false;
+  const left = Buffer.from(candidate);
+  const right = Buffer.from(expected);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+async function lockPlatformBootstrap(client: DatabaseClient): Promise<void> {
+  // Embedded PGlite serializes a client transaction with its in-process mutex.
+  // External PostgreSQL needs a database-wide lock to prevent two simultaneous
+  // first registrations from both receiving the superadmin role.
+  if (!config.DATABASE_URL.startsWith("pglite://") && config.DATABASE_URL !== "memory://") {
+    await client.query("SELECT pg_advisory_xact_lock(1346458194, 2)");
+  }
+}
 
 export async function registerPlatformUser(input: {
   email: string;
@@ -42,6 +61,7 @@ export async function registerPlatformUser(input: {
   name?: string;
   ipAddress?: string;
   userAgent?: string;
+  bootstrapToken?: string;
 }): Promise<PlatformAuthResult> {
   const email = input.email.trim().toLowerCase();
   if (!email || !email.includes("@")) {
@@ -51,39 +71,50 @@ export async function registerPlatformUser(input: {
     throw new ValidationError("Password must be at least 8 characters long.");
   }
 
-  const existing = await pool.query(
-    "SELECT id FROM platform_users WHERE email = $1",
-    [email]
-  );
-  if (existing.rowCount && existing.rowCount > 0) {
-    throw new ConflictError("A platform account with this email already exists.");
-  }
-
-  // First registered user on the platform becomes superadmin automatically
-  const countRes = await pool.query<{ count: string }>(
-    "SELECT COUNT(*)::text AS count FROM platform_users"
-  );
-  const isFirstUser = Number(countRes.rows[0]?.count ?? 0) === 0;
-
   const passwordHash = await hashPassword(input.password);
-  const insertRes = await pool.query<PlatformUser>(
-    `INSERT INTO platform_users (email, password_hash, name, is_superadmin, status, last_login_at)
-     VALUES ($1, $2, $3, $4, 'active', now())
-     RETURNING id, email, name, is_superadmin, status, last_login_at, created_at, updated_at`,
-    [email, passwordHash, (input.name ?? "").trim() || email.split("@")[0]!, isFirstUser]
-  );
-  const user = insertRes.rows[0]!;
+  const created = await withTransaction(async (client) => {
+    await lockPlatformBootstrap(client);
+    const existing = await client.query(
+      "SELECT id FROM platform_users WHERE email = $1",
+      [email]
+    );
+    if (existing.rowCount && existing.rowCount > 0) {
+      throw new ConflictError("A platform account with this email already exists.");
+    }
+
+    const countRes = await client.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM platform_users"
+    );
+    const isFirstUser = Number(countRes.rows[0]?.count ?? 0) === 0;
+    if (
+      isFirstUser &&
+      config.NODE_ENV === "production" &&
+      secretsEqual(input.bootstrapToken, config.PLATFORM_BOOTSTRAP_TOKEN) === false
+    ) {
+      throw new ForbiddenError("A valid bootstrap token is required for initial platform setup.");
+    }
+
+    const insertRes = await client.query<PlatformUser>(
+      `INSERT INTO platform_users (email, password_hash, name, is_superadmin, status, last_login_at)
+       VALUES ($1, $2, $3, $4, 'active', now())
+       RETURNING id, email, name, is_superadmin, status, last_login_at, created_at, updated_at`,
+      [email, passwordHash, (input.name ?? "").trim() || email.split("@")[0]!, isFirstUser]
+    );
+    const user = insertRes.rows[0]!;
+    const auth = await issuePlatformTokens(user, input.ipAddress, input.userAgent, client);
+    return { user, auth };
+  });
 
   await recordAuditEvent({
     actorType: "user",
-    actorId: user.id,
+    actorId: created.user.id,
     action: "platform.user.registered",
     resourceType: "platform_user",
-    resourceId: user.id,
-    metadata: { email: user.email, isSuperadmin: user.is_superadmin },
+    resourceId: created.user.id,
+    metadata: { email: created.user.email, isSuperadmin: created.user.is_superadmin },
   });
 
-  return issuePlatformTokens(user, input.ipAddress, input.userAgent);
+  return created.auth;
 }
 
 export async function loginPlatformUser(input: {
@@ -99,12 +130,9 @@ export async function loginPlatformUser(input: {
     [email]
   );
   const row = res.rows[0];
-  if (!row) {
-    throw new UnauthorizedError("Invalid email or password.");
-  }
-
-  const valid = await verifyPassword(input.password, row.password_hash);
-  if (!valid) {
+  const passwordHash = row?.password_hash ?? await dummyPasswordHash;
+  const valid = await verifyPassword(input.password, passwordHash);
+  if (!row || !valid) {
     throw new UnauthorizedError("Invalid email or password.");
   }
 
@@ -135,7 +163,8 @@ export async function loginPlatformUser(input: {
 async function issuePlatformTokens(
   user: PlatformUser,
   ipAddress?: string,
-  userAgent?: string
+  userAgent?: string,
+  client?: DatabaseClient
 ): Promise<PlatformAuthResult> {
   const rawRefreshToken = `mb_prt_${generateRandomToken(32)}`;
   const refreshHash = hashToken(rawRefreshToken);
@@ -143,12 +172,12 @@ async function issuePlatformTokens(
     Date.now() + PLATFORM_REFRESH_TTL_SECONDS * 1000
   ).toISOString();
 
-  const sessionRes = await pool.query<{ id: string }>(
-    `INSERT INTO platform_sessions (user_id, refresh_token_hash, user_agent, ip_address, expires_at)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id`,
-    [user.id, refreshHash, userAgent ?? null, ipAddress ?? null, expiresAt]
-  );
+  const sessionSql = `INSERT INTO platform_sessions (user_id, refresh_token_hash, user_agent, ip_address, expires_at)
+    VALUES ($1, $2, $3, $4, $5) RETURNING id`;
+  const sessionValues = [user.id, refreshHash, userAgent ?? null, ipAddress ?? null, expiresAt];
+  const sessionRes = client
+    ? await client.query<{ id: string }>(sessionSql, sessionValues)
+    : await pool.query<{ id: string }>(sessionSql, sessionValues);
 
   const accessToken = signJwt(
     {
@@ -175,45 +204,84 @@ export async function refreshPlatformSession(
   userAgent?: string
 ): Promise<PlatformAuthResult> {
   const refreshHash = hashToken(rawRefreshToken);
-  const sessionRes = await pool.query<{
-    id: string;
-    user_id: string;
-    revoked_at: string | null;
-    expires_at: string;
-  }>(
-    `SELECT id, user_id, revoked_at, expires_at
-     FROM platform_sessions
-     WHERE refresh_token_hash = $1`,
-    [refreshHash]
-  );
-  const session = sessionRes.rows[0];
-  if (!session) {
-    throw new UnauthorizedError("Invalid refresh token.");
-  }
-  if (session.revoked_at) {
-    // Revoke all user sessions on replay of revoked token
-    await pool.query(
-      "UPDATE platform_sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL",
+  const outcome = await withTransaction(async (client) => {
+    const sessionRes = await client.query<{
+      id: string;
+      user_id: string;
+      revoked_at: string | null;
+      expires_at: string;
+    }>(
+      `SELECT id, user_id, revoked_at, expires_at
+       FROM platform_sessions
+       WHERE refresh_token_hash = $1
+       FOR UPDATE`,
+      [refreshHash]
+    );
+    const session = sessionRes.rows[0];
+    if (!session) return { kind: "invalid" as const };
+
+    if (session.revoked_at) {
+      // Reuse of a rotated refresh token is treated as possible credential theft.
+      await client.query(
+        "UPDATE platform_sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL",
+        [session.user_id]
+      );
+      return { kind: "replay" as const, userId: session.user_id };
+    }
+    if (new Date(session.expires_at).getTime() <= Date.now()) {
+      return { kind: "expired" as const };
+    }
+
+    const userRes = await client.query<PlatformUser>(
+      `SELECT id, email, name, is_superadmin, status, last_login_at, created_at, updated_at
+       FROM platform_users WHERE id = $1 FOR UPDATE`,
       [session.user_id]
     );
-    throw new UnauthorizedError("Refresh token has already been revoked.");
+    const user = userRes.rows[0];
+    if (!user || user.status !== "active") {
+      await client.query(
+        "UPDATE platform_sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL",
+        [session.user_id]
+      );
+      return { kind: "inactive" as const, status: user?.status ?? "missing", userId: session.user_id };
+    }
+
+    await client.query(
+      "UPDATE platform_sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL",
+      [session.id]
+    );
+    const result = await issuePlatformTokens(user, ipAddress, userAgent, client);
+    return { kind: "success" as const, result, userId: user.id };
+  });
+
+  if (outcome.kind === "invalid") {
+    throw new UnauthorizedError("Invalid refresh token.");
   }
-  if (new Date(session.expires_at).getTime() < Date.now()) {
+  if (outcome.kind === "expired") {
     throw new UnauthorizedError("Refresh token has expired.");
   }
-
-  // Rotate refresh token
-  await pool.query(
-    "UPDATE platform_sessions SET revoked_at = now() WHERE id = $1",
-    [session.id]
-  );
-
-  const user = await getPlatformUserById(session.user_id);
-  if (user.status !== "active") {
-    throw new ForbiddenError(`Platform account is ${user.status}.`);
+  if (outcome.kind === "replay") {
+    await recordAuditEvent({
+      actorType: "user",
+      actorId: outcome.userId,
+      action: "platform.user.refresh_reuse_detected",
+      resourceType: "platform_session",
+      resourceId: outcome.userId,
+    });
+    throw new UnauthorizedError("Refresh token reuse detected; all active sessions were revoked.");
+  }
+  if (outcome.kind === "inactive") {
+    throw new ForbiddenError(`Platform account is ${outcome.status}.`);
   }
 
-  return issuePlatformTokens(user, ipAddress, userAgent);
+  await recordAuditEvent({
+    actorType: "user",
+    actorId: outcome.userId,
+    action: "platform.user.session_refreshed",
+    resourceType: "platform_session",
+    resourceId: outcome.userId,
+  });
+  return outcome.result;
 }
 
 export async function logoutPlatformSession(

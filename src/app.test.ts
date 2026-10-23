@@ -98,9 +98,27 @@ test("dashboard routes serve MARRY BASE management interface, logo, and assets",
 test("APK builder initiates, builds, signs, and serves the MARRY BASE Android APK", async () => {
   const app = await buildApp();
   try {
+    const anonymousBuild = await app.inject({
+      method: "POST",
+      url: "/v1/platform/apk/build",
+      payload: { versionName: "1.0.0", versionCode: 1 },
+    });
+    assert.equal(anonymousBuild.statusCode, 401);
+
+    const registration = await app.inject({
+      method: "POST",
+      url: "/v1/platform/auth/register",
+      payload: {
+        email: `apk-builder-${Date.now()}@maary.dev`,
+        password: "StrongPassword123!",
+      },
+    });
+    assert.equal(registration.statusCode, 201, registration.body);
+    const accessToken = registration.json().accessToken as string;
     const buildRes = await app.inject({
       method: "POST",
       url: "/v1/platform/apk/build",
+      headers: { authorization: `Bearer ${accessToken}` },
       payload: {
         versionName: "1.0.0",
         versionCode: 1,

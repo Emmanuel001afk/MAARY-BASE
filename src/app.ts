@@ -26,13 +26,13 @@ export async function buildApp() {
 
   const app = Fastify({
     logger: { level: config.LOG_LEVEL },
-    trustProxy: true,
+    trustProxy: config.TRUST_PROXY,
     bodyLimit: Math.max(config.MAX_UPLOAD_BYTES + 1_048_576, 10_485_760),
     requestTimeout: 30_000,
   });
 
   await app.register(helmet, {
-    frameguard: false,
+    frameguard: { action: "sameorigin" },
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
@@ -40,15 +40,15 @@ export async function buildApp() {
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", "data:", "blob:"],
         connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
-        frameAncestors: ["*"],
+        frameAncestors: ["'self'"],
       },
     },
   });
 
   const origins = config.CORS_ORIGIN.split(",").map((o) => o.trim());
   await app.register(cors, {
-    origin: origins.includes("*") ? true : origins,
-    credentials: true,
+    origin: origins.includes("*") ? "*" : origins,
+    credentials: false,
   });
 
   await app.register(rateLimit, {

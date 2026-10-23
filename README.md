@@ -21,7 +21,7 @@
 | **Realtime Services** | Operational | Authenticated WebSocket server (`/v1/projects/:ref/realtime/ws`), automatic PostgreSQL row-change capture via `SECURITY DEFINER` triggers (`INSERT`, `UPDATE`, `DELETE`), channel broadcast, presence tracking, reconnection event replay via `lastEventId`. |
 | **Server Functions & Jobs** | Operational | Versioned JS functions executed in a sandboxed `node:vm` runtime with CPU timeouts, console log capture, encrypted secret injection, and project-scoped DB bridge; durable PostgreSQL background job queue with retries, exponential backoff, dead-letter state, idempotency keys, and recurring schedules. |
 | **Management Studio, CLI & SDK** | Operational | Interactive browser dashboard (`/` and `/dashboard`) branded with the official MARRY BASE logo, CLI (`npm run cli -- ...`), and fluent TypeScript SDK (`createMaaryClient`). |
-| **Android APK Builder & Mobile** | Operational | Built-in Android `.apk` packager & RSA v1 JAR signer (`releases/marry-base.apk`), native Android project source (`android/`), CLI builder (`npm run build:apk`), and REST endpoints (`POST /v1/platform/apk/build`, `GET /v1/platform/apk/download`). |
+| **Android APK Builder & Mobile** | Operational | Built-in Android `.apk` packager & RSA v1 JAR signer (`releases/marry-base.apk`), native Android project source (`android/`), CLI builder (`npm run build:apk`), and REST endpoints (`POST /v1/platform/apk/build` requires a platform access token; `GET /v1/platform/apk/download` serves the APK). |
 | **Operations & Backups** | Operational | `/health`, `/ready`, `/v1/metrics` (JSON & Prometheus format), logical project/platform backups with SHA-256 integrity verification and transactional restoration. |
 
 ---
@@ -53,7 +53,8 @@ Open `http://localhost:4100` in your browser to access the **MAARY BASE Manageme
 
 ```bash
 cp .env.example .env
-# Set strong POSTGRES_PASSWORD, JWT_SECRET, and ENCRYPTION_KEY in .env
+# Set NODE_ENV=production and unique POSTGRES_PASSWORD, JWT_SECRET, ENCRYPTION_KEY,
+# and PLATFORM_BOOTSTRAP_TOKEN values in .env (see docs/OPERATIONS.md).
 docker compose up -d --build
 ```
 

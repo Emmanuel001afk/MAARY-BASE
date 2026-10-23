@@ -1,6 +1,7 @@
 import { access, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { config } from "../config.js";
 import { pool } from "./pool.js";
 
 async function resolveMigrationsDir(): Promise<string> {
@@ -24,6 +25,9 @@ export async function runMigrations(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    if (!config.DATABASE_URL.startsWith("pglite://") && config.DATABASE_URL !== "memory://") {
+      await client.query("SELECT pg_advisory_xact_lock(1346458194, 1)");
+    }
     await client.query(
       "CREATE TABLE IF NOT EXISTS platform_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"
     );

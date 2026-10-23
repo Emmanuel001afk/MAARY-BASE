@@ -5,10 +5,7 @@ import { z } from "zod";
 import { getMigrationStatus } from "../db/migrate.js";
 import { pool } from "../db/pool.js";
 import { ValidationError } from "../lib/errors.js";
-import {
-  optionalPlatformUser,
-  requirePlatformUser,
-} from "../middleware/auth.middleware.js";
+import { requirePlatformUser } from "../middleware/auth.middleware.js";
 import {
   buildMarryBaseApk,
   getOrBuildDefaultApk,
@@ -108,7 +105,7 @@ export async function registerPlatformRoutes(
 
   // APK Build & Download Endpoints
   app.post("/v1/platform/apk/build", async (request, reply) => {
-    const user = await optionalPlatformUser(request);
+    const user = await requirePlatformUser(request);
     const body = (request.body ?? {}) as {
       projectSlug?: string;
       serverUrl?: string;
@@ -160,8 +157,10 @@ export async function registerPlatformRoutes(
         parsed.error.issues.map((i) => i.message).join("; ")
       );
     }
+    const bootstrapHeader = request.headers["x-platform-bootstrap-token"];
     const result = await registerPlatformUser({
       ...parsed.data,
+      bootstrapToken: typeof bootstrapHeader === "string" ? bootstrapHeader : undefined,
       ipAddress: request.ip,
       userAgent: request.headers["user-agent"],
     });
