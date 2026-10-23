@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, normalize, resolve } from "node:path";
 import { config } from "../config.js";
@@ -21,7 +21,7 @@ export interface StorageBackendAdapter {
   deleteObject(storageKey: string): Promise<void>;
 }
 
-class LocalFilesystemAdapter implements StorageBackendAdapter {
+export class LocalFilesystemAdapter implements StorageBackendAdapter {
   constructor(private readonly baseDir: string) {}
 
   private resolveSafePath(storageKey: string): string {
@@ -58,9 +58,155 @@ class LocalFilesystemAdapter implements StorageBackendAdapter {
   }
 }
 
-export const storageAdapter: StorageBackendAdapter = new LocalFilesystemAdapter(
-  config.STORAGE_DIR
-);
+export class S3StorageAdapter implements StorageBackendAdapter {
+  private readonly endpoint: string;
+  private readonly bucket: string;
+  private readonly region: string;
+  private readonly accessKeyId: string;
+  private readonly secretAccessKey: string;
+
+  constructor(opts: {
+    endpoint: string;
+    bucket: string;
+    region?: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+  }) {
+    this.endpoint = opts.endpoint.replace(/\/+$/, "");
+    this.bucket = opts.bucket;
+    this.region = opts.region || "us-east-1";
+    this.accessKeyId = opts.accessKeyId;
+    this.secretAccessKey = opts.secretAccessKey;
+  }
+
+  private hmac(key: Buffer | string, data: string): Buffer {
+    return createHmac("sha256", key).update(data, "utf8").digest();
+  }
+
+  private sha256Hex(data: Buffer | string): string {
+    return createHash("sha256").update(data).digest("hex");
+  }
+
+  private buildSignedRequest(
+    method: "PUT" | "GET" | "DELETE",
+    storageKey: string,
+    body: Buffer,
+    contentType?: string
+  ): { url: string; headers: Record<string, string> } {
+    const cleanKey = storageKey
+      .split("/")
+      .filter(Boolean)
+      .map((seg) => encodeURIComponent(seg))
+      .join("/");
+    const urlObj = new URL(`${this.endpoint}/${encodeURIComponent(this.bucket)}/${cleanKey}`);
+    const now = new Date();
+    const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+    const dateStamp = amzDate.slice(0, 8);
+    const payloadHash = this.sha256Hex(body);
+
+    const headers: Record<string, string> = {
+      host: urlObj.host,
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": amzDate,
+    };
+    if (contentType) {
+      headers["content-type"] = contentType;
+    }
+
+    const sortedHeaderKeys = Object.keys(headers).sort();
+    const canonicalHeaders = sortedHeaderKeys
+      .map((k) => `${k}:${headers[k]!.trim()}\n`)
+      .join("");
+    const signedHeaders = sortedHeaderKeys.join(";");
+
+    const canonicalRequest = [
+      method,
+      urlObj.pathname,
+      "",
+      canonicalHeaders,
+      signedHeaders,
+      payloadHash,
+    ].join("\n");
+
+    const credentialScope = `${dateStamp}/${this.region}/s3/aws4_request`;
+    const stringToSign = [
+      "AWS4-HMAC-SHA256",
+      amzDate,
+      credentialScope,
+      this.sha256Hex(canonicalRequest),
+    ].join("\n");
+
+    const kDate = this.hmac(`AWS4${this.secretAccessKey}`, dateStamp);
+    const kRegion = this.hmac(kDate, this.region);
+    const kService = this.hmac(kRegion, "s3");
+    const kSigning = this.hmac(kService, "aws4_request");
+    const signature = createHmac("sha256", kSigning)
+      .update(stringToSign, "utf8")
+      .digest("hex");
+
+    headers.authorization = `AWS4-HMAC-SHA256 Credential=${this.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+    return { url: urlObj.toString(), headers };
+  }
+
+  async putObject(
+    storageKey: string,
+    data: Buffer,
+    mimeType: string
+  ): Promise<void> {
+    const req = this.buildSignedRequest("PUT", storageKey, data, mimeType);
+    const res = await fetch(req.url, {
+      method: "PUT",
+      headers: req.headers,
+      body: new Uint8Array(data),
+    });
+    if (!res.ok) {
+      throw new Error(`S3 PUT failed with HTTP ${res.status}`);
+    }
+  }
+
+  async getObject(storageKey: string): Promise<Buffer> {
+    const req = this.buildSignedRequest("GET", storageKey, Buffer.alloc(0));
+    const res = await fetch(req.url, {
+      method: "GET",
+      headers: req.headers,
+    });
+    if (res.status === 404) {
+      throw new NotFoundError("Stored file blob not found on S3 storage backend.");
+    }
+    if (!res.ok) {
+      throw new Error(`S3 GET failed with HTTP ${res.status}`);
+    }
+    const ab = await res.arrayBuffer();
+    return Buffer.from(ab);
+  }
+
+  async deleteObject(storageKey: string): Promise<void> {
+    const req = this.buildSignedRequest("DELETE", storageKey, Buffer.alloc(0));
+    const res = await fetch(req.url, {
+      method: "DELETE",
+      headers: req.headers,
+    });
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`S3 DELETE failed with HTTP ${res.status}`);
+    }
+  }
+}
+
+export const storageAdapter: StorageBackendAdapter =
+  config.STORAGE_BACKEND === "s3" &&
+  config.S3_ENDPOINT &&
+  config.S3_BUCKET &&
+  config.S3_ACCESS_KEY_ID &&
+  config.S3_SECRET_ACCESS_KEY
+    ? new S3StorageAdapter({
+        endpoint: config.S3_ENDPOINT,
+        bucket: config.S3_BUCKET,
+        region: config.S3_REGION,
+        accessKeyId: config.S3_ACCESS_KEY_ID,
+        secretAccessKey: config.S3_SECRET_ACCESS_KEY,
+      })
+    : new LocalFilesystemAdapter(config.STORAGE_DIR);
 
 export interface StorageBucketRecord {
   id: string;

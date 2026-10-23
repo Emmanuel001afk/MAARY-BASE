@@ -9,6 +9,7 @@ import { hstore } from "@electric-sql/pglite/contrib/hstore";
 import { ltree } from "@electric-sql/pglite/contrib/ltree";
 import { citext } from "@electric-sql/pglite/contrib/citext";
 import { config } from "../config.js";
+import { ForbiddenError } from "../lib/errors.js";
 import { quoteIdent } from "../lib/sql-safety.js";
 
 const { Pool } = pg;
@@ -367,17 +368,30 @@ export async function withRlsTransaction<T>(
       [sub, role, email, projectId, claimsJson]
     );
 
-    // Switch to project-isolated non-superuser role unless service_role bypass is active
-    const shouldEnforceRls =
-      !ctx.bypassRls && ctx.role !== "service_role";
-    if (shouldEnforceRls) {
-      const targetRole = ctx.dbRoleName
-        ? quoteIdent(ctx.dbRoleName)
-        : "maary_rls_user";
-      await client.query(`SET LOCAL ROLE ${targetRole}`);
+    // Always switch to a project-isolated non-superuser PostgreSQL role so the database
+    // privilege boundary independently enforces cross-project and control-plane isolation,
+    // even for privileged service_role queries.
+    const isServiceRole = Boolean(ctx.bypassRls || ctx.role === "service_role");
+    const expectedRoleName = ctx.dbRoleName
+      ? isServiceRole
+        ? ctx.dbRoleName
+        : `${ctx.dbRoleName}_rls`
+      : "maary_rls_user";
+    const targetRoleIdent = quoteIdent(expectedRoleName);
+    await client.query(`SET LOCAL ROLE ${targetRoleIdent}`);
+
+    const result = await fn(client);
+
+    const roleCheck = await client.query<{ current_user: string }>(
+      "SELECT current_user"
+    );
+    if (roleCheck.rows[0]?.current_user !== expectedRoleName) {
+      throw new ForbiddenError(
+        "Database privilege boundary violation: unauthorized role switch detected."
+      );
     }
 
-    return fn(client);
+    return result;
   });
 }
 

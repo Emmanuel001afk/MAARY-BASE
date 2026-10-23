@@ -1,4 +1,4 @@
-name: MAARY BASE CI
+name: MARRY BASE CI & APK Artifact Build
 
 on:
   push:
@@ -25,8 +25,20 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Build production bundle
+      - name: Build production bundle & Android APK
         run: npm run build
 
-      - name: Run integration test suite
+      - name: Run adversarial & integration test suites
         run: npm test
+
+      - name: Upload MARRY BASE Android APK & App Icon Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: marry-base-release-artifacts
+          path: |
+            releases/marry-base.apk
+            assets/logo.png
+            assets/app-icon.png
+            assets/logo.svg
+            assets/app-icon.svg
+          if-no-files-found: error

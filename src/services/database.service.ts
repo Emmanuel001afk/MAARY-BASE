@@ -8,6 +8,7 @@ import {
 } from "../db/pool.js";
 import {
   ConflictError,
+  ForbiddenError,
   NotFoundError,
   QuotaExceededError,
   ValidationError,
@@ -123,46 +124,121 @@ export async function ensureProjectSchemaPrivilegesAndTriggers(
 ): Promise<void> {
   const runner = client ?? pool;
   const schemaIdent = quoteIdent(project.schema_name);
-  const roleIdent = project.db_role_name
-    ? quoteIdent(project.db_role_name)
+  const dbRoleName = project.db_role_name || "maary_rls_user";
+  const rlsRoleName = project.db_role_name
+    ? `${project.db_role_name}_rls`
     : "maary_rls_user";
+  const roleIdent = quoteIdent(dbRoleName);
+  const rlsRoleIdent = quoteIdent(rlsRoleName);
 
-  await runner.query(
-    `GRANT USAGE ON SCHEMA ${schemaIdent} TO ${roleIdent}, maary_rls_user`
-  );
-  await runner.query(
-    `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schemaIdent} TO ${roleIdent}, maary_rls_user`
-  );
-  await runner.query(
-    `GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA ${schemaIdent} TO ${roleIdent}, maary_rls_user`
-  );
-  await runner.query(
-    `GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${schemaIdent} TO ${roleIdent}, maary_rls_user`
-  );
+  // If running inside a role-restricted transaction, temporarily reset role for control-plane maintenance
+  let previousRole: string | null = null;
+  if (client) {
+    const roleRes = await client.query<{
+      current_user: string;
+      session_user: string;
+    }>("SELECT current_user, session_user");
+    const cur = roleRes.rows[0]?.current_user;
+    const sess = roleRes.rows[0]?.session_user;
+    if (cur && sess && cur !== sess) {
+      previousRole = cur;
+      await client.query("RESET ROLE");
+    }
+  }
 
-  // Attach realtime change capture trigger to any table in the project schema that lacks it
-  const tablesRes = await runner.query<{ table_name: string }>(
-    `SELECT t.table_name
-     FROM information_schema.tables t
-     WHERE t.table_schema = $1 AND t.table_type = 'BASE TABLE'`,
-    [project.schema_name]
-  );
+  try {
+    await runner.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${dbRoleName}') THEN
+          CREATE ROLE ${roleIdent} NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${rlsRoleName}') THEN
+          CREATE ROLE ${rlsRoleIdent} NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+        END IF;
+      END
+      $$;
+    `);
 
-  for (const row of tablesRes.rows) {
-    const tblIdent = quoteIdent(row.table_name);
-    const trigExists = await runner.query(
-      `SELECT 1 FROM information_schema.triggers
-       WHERE event_object_schema = $1
-         AND event_object_table = $2
-         AND trigger_name = 'maary_realtime_trigger'`,
-      [project.schema_name, row.table_name]
+    await runner.query(
+      `REVOKE ALL ON SCHEMA ${schemaIdent} FROM PUBLIC, maary_rls_user, maary_anon, maary_authenticated, maary_service_role`
     );
-    if (!trigExists.rowCount) {
+    await runner.query(`GRANT ALL ON SCHEMA ${schemaIdent} TO ${roleIdent}`);
+    await runner.query(
+      `GRANT USAGE ON SCHEMA ${schemaIdent} TO ${rlsRoleIdent}`
+    );
+    await runner.query(
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schemaIdent} TO ${roleIdent}, ${rlsRoleIdent}`
+    );
+    await runner.query(
+      `GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA ${schemaIdent} TO ${roleIdent}, ${rlsRoleIdent}`
+    );
+    await runner.query(
+      `GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${schemaIdent} TO ${roleIdent}, ${rlsRoleIdent}`
+    );
+
+    const tablesRes = await runner.query<{ table_name: string }>(
+      `SELECT t.table_name
+       FROM information_schema.tables t
+       WHERE t.table_schema = $1 AND t.table_type = 'BASE TABLE'`,
+      [project.schema_name]
+    );
+
+    for (const row of tablesRes.rows) {
+      const tblIdent = quoteIdent(row.table_name);
       await runner.query(
-        `CREATE TRIGGER maary_realtime_trigger
-         AFTER INSERT OR UPDATE OR DELETE ON ${schemaIdent}.${tblIdent}
-         FOR EACH ROW EXECUTE FUNCTION public.maary_capture_row_change('${project.id}')`
+        `ALTER TABLE ${schemaIdent}.${tblIdent} OWNER TO ${roleIdent}`
       );
+      await runner.query(
+        `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE ${schemaIdent}.${tblIdent} TO ${roleIdent}, ${rlsRoleIdent}`
+      );
+
+      // Ensure service_role owner policy exists so role_<slug> can operate on RLS-forced tables in its own schema
+      await runner.query(
+        `DROP POLICY IF EXISTS "_marry_base_service_role_bypass" ON ${schemaIdent}.${tblIdent}`
+      );
+      await runner.query(
+        `CREATE POLICY "_marry_base_service_role_bypass"
+         ON ${schemaIdent}.${tblIdent}
+         AS PERMISSIVE
+         FOR ALL
+         TO ${roleIdent}
+         USING (true)
+         WITH CHECK (true)`
+      );
+
+      const trigExists = await runner.query(
+        `SELECT 1 FROM information_schema.triggers
+         WHERE event_object_schema = $1
+           AND event_object_table = $2
+           AND trigger_name = 'maary_realtime_trigger'`,
+        [project.schema_name, row.table_name]
+      );
+      if (!trigExists.rowCount) {
+        await runner.query(
+          `CREATE TRIGGER maary_realtime_trigger
+           AFTER INSERT OR UPDATE OR DELETE ON ${schemaIdent}.${tblIdent}
+           FOR EACH ROW EXECUTE FUNCTION public.maary_capture_row_change('${project.id}')`
+        );
+      }
+    }
+
+    const seqRes = await runner.query<{ sequence_name: string }>(
+      `SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema = $1`,
+      [project.schema_name]
+    );
+    for (const seq of seqRes.rows) {
+      const seqIdent = quoteIdent(seq.sequence_name);
+      await runner.query(
+        `ALTER SEQUENCE ${schemaIdent}.${seqIdent} OWNER TO ${roleIdent}`
+      );
+      await runner.query(
+        `GRANT USAGE, SELECT, UPDATE ON SEQUENCE ${schemaIdent}.${seqIdent} TO ${roleIdent}, ${rlsRoleIdent}`
+      );
+    }
+  } finally {
+    if (client && previousRole) {
+      await client.query(`SET LOCAL ROLE ${quoteIdent(previousRole)}`);
     }
   }
 }
@@ -271,7 +347,8 @@ export async function inspectProjectSchema(
     }>(
       `SELECT tablename, policyname, cmd, roles, qual, with_check
        FROM pg_policies
-       WHERE schemaname = $1`,
+       WHERE schemaname = $1
+         AND policyname <> '_marry_base_service_role_bypass'`,
       [schema]
     ),
   ]);
@@ -640,6 +717,7 @@ export async function setProjectTableRls(
         `ALTER TABLE ${schemaIdent}.${tableIdent} NO FORCE ROW LEVEL SECURITY`
       );
     }
+    await ensureProjectSchemaPrivilegesAndTriggers(project, client);
   });
 
   await recordAuditEvent({
@@ -729,6 +807,7 @@ export async function createProjectRlsPolicy(
       `DROP POLICY IF EXISTS ${policyIdent} ON ${schemaIdent}.${tableIdent}`
     );
     await client.query(clauses.join(" "));
+    await ensureProjectSchemaPrivilegesAndTriggers(project, client);
     await client.query(
       `INSERT INTO platform_rls_policies (
         project_id, table_name, policy_name, command, roles, using_expression, check_expression
@@ -852,6 +931,19 @@ export async function executeProjectSql(
     },
     async (client) => {
       const qRes = await client.query(input.sql, input.params);
+      const expectedRole = project.db_role_name
+        ? role === "service_role"
+          ? project.db_role_name
+          : `${project.db_role_name}_rls`
+        : "maary_rls_user";
+      const roleCheck = await client.query<{ current_user: string }>(
+        "SELECT current_user"
+      );
+      if (roleCheck.rows[0]?.current_user !== expectedRole) {
+        throw new ForbiddenError(
+          "Database privilege boundary violation: unauthorized role switch detected."
+        );
+      }
       if (!analysis.isReadOnly && role === "service_role") {
         await ensureProjectSchemaPrivilegesAndTriggers(project, client);
       }
@@ -957,9 +1049,14 @@ export async function applyProjectMigration(
   }
 
   const schemaIdent = quoteIdent(project.schema_name);
+  const roleIdent = project.db_role_name
+    ? quoteIdent(project.db_role_name)
+    : "maary_rls_user";
   const record = await withTransaction(async (client) => {
     await client.query(`SET LOCAL search_path TO ${schemaIdent}, auth, public`);
+    await client.query(`SET LOCAL ROLE ${roleIdent}`);
     await client.query(input.upSql);
+    await client.query("RESET ROLE");
     await ensureProjectSchemaPrivilegesAndTriggers(project, client);
 
     const migRes = await client.query<ProjectMigrationRecord>(
@@ -1032,9 +1129,14 @@ export async function rollbackProjectMigration(
   });
 
   const schemaIdent = quoteIdent(project.schema_name);
+  const roleIdent = project.db_role_name
+    ? quoteIdent(project.db_role_name)
+    : "maary_rls_user";
   const updated = await withTransaction(async (client) => {
     await client.query(`SET LOCAL search_path TO ${schemaIdent}, auth, public`);
+    await client.query(`SET LOCAL ROLE ${roleIdent}`);
     await client.query(migration.down_sql);
+    await client.query("RESET ROLE");
     const res = await client.query<ProjectMigrationRecord>(
       `UPDATE platform_project_migrations
        SET status = 'rolled_back', rolled_back_at = now()
