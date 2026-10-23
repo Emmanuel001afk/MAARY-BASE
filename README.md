@@ -4,75 +4,53 @@
   <img src="assets/logo.png" alt="MARRY BASE Official Logo" width="180" />
 </p>
 
-**MARRY BASE** (also aliased as `MAARY BASE`) is an independent, self-hostable, general-purpose backend platform built on PostgreSQL and TypeScript/Fastify. It provides an integrated control plane, multi-project schema and role isolation, authentication, REST and RPC APIs, object storage, realtime subscriptions, server functions, background jobs, backups, a web management studio, a CLI, a TypeScript SDK, and an Android companion app for opening the management dashboard on a reachable MARRY BASE server.
+**MARRY BASE** (also aliased as `MAARY BASE`) is an independent, self-hostable, general-purpose backend platform built on PostgreSQL and TypeScript/Fastify. It provides an integrated control plane, multi-project schema and role isolation, native PostgreSQL Row-Level Security (RLS), authentication and identity management, auto-generated REST and RPC Data APIs, object storage, WebSocket realtime subscriptions, server functions, background jobs, logical backups and restoration, a web management studio, a CLI, a TypeScript SDK, and an Android companion app for connecting to a running MARRY BASE dashboard.
 
 ---
 
-## Android app and APK
+## Capabilities Overview
 
-The Android app is a native WebView shell for the MARRY BASE management dashboard. On first launch, it asks for the URL of a running MARRY BASE server and remembers that URL. Use an HTTPS URL for remote deployments. For a local network deployment, use the server device's reachable LAN address and port (for example, `http://192.168.1.10:4100`); `localhost` on a phone refers to the phone itself.
-
-The APK is built with the Android Gradle Plugin, not by manually assembling ZIP/DEX/manifest bytes.
-
-### Download the APK from GitHub Actions
-
-1. Open the repository's **Actions** tab.
-2. Select the latest **MAARY BASE CI** run for your branch.
-3. Open the **Build Android APK** job and wait for it to succeed.
-4. Download the `maary-base-android-debug-apk` artifact from the run's **Artifacts** section.
-5. Extract the downloaded ZIP; it contains `app-debug.apk`. Transfer that APK to the Android device and install it.
-
-Artifacts are retained for 30 days. The debug APK is intended for testing and sideloading; a release APK with a managed signing key should be added before store distribution.
-
----
-
-## Capabilities overview
-
-| Subsystem | Status | Key capabilities |
+| Subsystem | Implementation Status | Key Capabilities |
 | :--- | :--- | :--- |
-| Control plane and projects | Implemented | Multi-project lifecycle, RBAC, scoped API keys, encrypted secrets, audit logging |
-| Database infrastructure | Implemented | External PostgreSQL or embedded PGlite, project schemas, migrations, SQL editor |
-| Authentication and identity | Implemented | Password hashing, access tokens, refresh token rotation, OAuth integration |
-| Data APIs | Implemented | REST CRUD, filtering, pagination, relationship embedding, RPC and OpenAPI |
-| Object storage | Implemented | Public/private buckets, access policies, quotas, checksums, signed URLs |
-| Realtime services | Implemented | Authenticated WebSocket subscriptions and broadcasts |
-| Server functions and jobs | Implemented with limitations | Versioned functions, execution timeouts, durable job queue |
-| Management studio, CLI and SDK | Implemented | Web dashboard, CLI and TypeScript SDK |
-| Android companion app | Build configured | Dashboard WebView, configurable server URL, CI-built debug APK artifact |
-| Operations and backups | Implemented with limitations | Health endpoints, metrics, logical backups and restoration |
+| **Control Plane & Projects** | Operational | Multi-project lifecycle, environments (`development`, `staging`, `production`, custom), RBAC (`owner`, `admin`, `developer`, `viewer`), scoped API keys with rotation, AES-256-GCM encrypted secrets, audit logging. |
+| **Database Infrastructure** | Operational | Supports external PostgreSQL (`postgres://`) and embedded PostgreSQL (`pglite://`), per-project schema isolation (`proj_<slug>`) + dedicated PostgreSQL roles (`role_<slug>`), table/column/index/FK management, versioned project migrations with SHA-256 checksums and rollback, SQL editor with destructive-query safeguards, extension management. |
+| **Row-Level Security (RLS)** | Operational | Native PostgreSQL `ENABLE/FORCE ROW LEVEL SECURITY` and `CREATE POLICY` integrated with `auth.uid()`, `auth.role()`, `auth.email()`, `auth.project_id()`, and `auth.jwt()` SQL session helpers. |
+| **Authentication & Identity** | Operational | Project user registration, `scrypt` password hashing, email verification tokens, password recovery, JWT access tokens + opaque refresh token rotation with reuse detection (`token_family_id`), OAuth provider authorization & callback identity linking, admin user management (ban/unban/delete). |
+| **Data APIs & OpenAPI** | Operational | Auto-generated REST CRUD (`/v1/projects/:ref/rest/:table`), PostgREST-compatible filtering (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`, `is`, `contains`, `or`), ordering, pagination, count, many-to-one & one-to-many foreign-key relationship embedding, stored procedure RPC (`/v1/projects/:ref/rpc/:fn`), live OpenAPI 3.1 spec (`/v1/projects/:ref/openapi.json`). |
+| **Object Storage** | Operational | Public & private buckets, bucket access policies (`path_prefix`, `allow_owner_only`, role checks), MIME validation, file-size limits, storage quotas, SHA-256 checksums, HMAC signed download/upload URLs, multipart resumable uploads, abandoned upload cleanup. |
+| **Realtime Services** | Operational | Authenticated WebSocket server (`/v1/projects/:ref/realtime/ws`), automatic PostgreSQL row-change capture via `SECURITY DEFINER` triggers (`INSERT`, `UPDATE`, `DELETE`), channel broadcast, presence tracking, reconnection event replay via `lastEventId`. |
+| **Server Functions & Jobs** | Operational | Versioned JS functions executed in a sandboxed `node:vm` runtime with CPU timeouts, console log capture, encrypted secret injection, and project-scoped DB bridge; durable PostgreSQL background job queue with retries, exponential backoff, dead-letter state, idempotency keys, and recurring schedules. |
+| **Management Studio, CLI & SDK** | Operational | Interactive browser dashboard (`/` and `/dashboard`) branded with the official MARRY BASE logo, CLI (`npm run cli -- ...`), and fluent TypeScript SDK (`createMaaryClient`). |
+| **Android Companion App** | Build configured | Native Android WebView app for connecting to a reachable MARRY BASE dashboard; CI builds a real debug APK using Gradle and publishes it as a downloadable GitHub Actions artifact. |
+| **Operations & Backups** | Operational | `/health`, `/ready`, `/v1/metrics` (JSON & Prometheus format), logical project/platform backups with SHA-256 integrity verification and transactional restoration. |
 
 ---
 
 ## Requirements
 
-- Node.js 22+
-- External PostgreSQL 15+ or embedded PGlite for local operation
-- Java 17, Android SDK platform 34, Android build-tools 34.0.0, and Gradle 8.2.1 to build the Android app locally
+- **Node.js**: 22+
+- **Android APK build**: Java 17, Android SDK platform 34/build-tools 34.0.0, and Gradle 8.2.1 (provided automatically in GitHub Actions)
+- **Database**:
+  - External PostgreSQL 15+ (`DATABASE_URL=postgres://...` via Docker Compose or self-hosted PostgreSQL), **or**
+  - Embedded persistent PostgreSQL (`DATABASE_URL=pglite://./data/postgres`) for zero-dependency local operation, **or**
+  - Embedded in-memory PostgreSQL (`DATABASE_URL=pglite://memory`) for fast isolated integration testing.
 
-## Quick start
+---
 
-### Backend
+## Quick Start
+
+### 1. Local Self-Contained Operation (No Docker Required)
 
 ```bash
-npm ci
+npm install
 cp .env.example .env
 npm run db:migrate
 npm run dev
 ```
 
-Open `http://localhost:4100` on a computer on the same device as the server to access the management studio.
+Open `http://localhost:4100` in your browser to access the **MAARY BASE Management Studio**.
 
-### Android APK
-
-With Java 17, Android SDK platform 34/build-tools 34.0.0, and Gradle 8.2.1 installed:
-
-```bash
-npm run build:apk
-```
-
-The APK is created at `android/app/build/outputs/apk/debug/app-debug.apk`.
-
-### Docker Compose deployment
+### 2. Docker Compose Deployment (External PostgreSQL 17)
 
 ```bash
 cp .env.example .env
@@ -80,13 +58,115 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-## Developer workflows
+---
+
+## Android APK build and download
+
+The Android app is built with the Android Gradle Plugin. It is not assembled by manually creating ZIP, DEX, or manifest bytes.
+
+To build locally, install Java 17, Android SDK platform 34/build-tools 34.0.0, and Gradle 8.2.1, then run:
 
 ```bash
-npm run typecheck
-npm run build
-npm test
-npm run cli -- status
+npm run build:apk
 ```
 
-See `docs/ARCHITECTURE.md`, `docs/API_REFERENCE.md`, and `docs/OPERATIONS.md` for additional details.
+The installable debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+For a GitHub-built APK, open the repository's **Actions** tab, select the latest **MAARY BASE CI** run for your branch, wait for **Build Android APK** to succeed, and download the `maary-base-android-debug-apk` artifact. Extract the ZIP to get `app-debug.apk`. Artifacts are retained for 30 days. This debug build is for testing/sideloading; store distribution requires a separately managed release signing key.
+
+The installed app prompts for the URL of a running MARRY BASE server and remembers it. Use an HTTPS URL for remote deployments. For a local-network server, use the server device's reachable LAN IP and port, not `localhost` on the phone.
+
+## Developer Workflows
+
+### CLI Usage
+
+```bash
+# Check platform health, database mode, and migration status
+npm run cli -- status
+
+# Apply platform migrations
+npm run cli -- db migrate
+
+# Create an isolated project (outputs anon and service_role keys)
+npm run cli -- projects create "Acme App" acme-app
+
+# Inspect project diagnostics and schema tables
+npm run cli -- projects inspect acme-app
+
+# Execute SQL inside the project's isolated schema
+npm run cli -- sql acme-app "CREATE TABLE todos (id serial PRIMARY KEY, title text NOT NULL);"
+
+# Create, verify, and restore a logical backup
+npm run cli -- backup create acme-app
+npm run cli -- backup list acme-app
+npm run cli -- backup verify <backupId>
+npm run cli -- backup restore <backupId>
+```
+
+### TypeScript Client SDK (`src/sdk/index.ts`)
+
+```ts
+import { createMaaryClient } from "./src/sdk/index.js";
+
+const maary = createMaaryClient("http://localhost:4100", "<PROJECT_ANON_KEY>", {
+  projectRef: "acme-app",
+});
+
+// 1. Authenticate an application user
+await maary.auth.signUp({
+  email: "developer@acme.io",
+  password: "StrongPassword123!",
+});
+
+// 2. Query & mutate database tables (enforcing PostgreSQL Row-Level Security)
+const { data: created } = await maary
+  .from("todos")
+  .insert({ title: "Launch on MAARY BASE" });
+
+const { data: todos } = await maary
+  .from("todos")
+  .select("id,title")
+  .eq("title", "Launch on MAARY BASE")
+  .limit(10);
+
+// 3. Upload and create signed URLs in Object Storage
+await maary.storage.from("avatars").upload("users/profile.txt", "Hello World", {
+  mimeType: "text/plain",
+});
+
+// 4. Invoke an isolated Server Function
+const fnRes = await maary.functions.invoke("hello-world", {
+  body: { event: "signup" },
+});
+
+// 5. Subscribe to live PostgreSQL row changes over WebSocket
+const channel = await maary.realtime
+  .channel("db:todos")
+  .on("postgres_changes", (event) => {
+    console.log("Row change:", event.operation, event.record);
+  })
+  .subscribe();
+```
+
+---
+
+## Verification & Testing
+
+```bash
+# Run TypeScript typechecking
+npm run typecheck
+
+# Compile production build to dist/
+npm run build
+
+# Run the full integration test suite
+npm test
+```
+
+---
+
+## Documentation
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — System architecture, security boundaries, project isolation, and subsystem design.
+- [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) — Complete HTTP & WebSocket API reference.
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — Deployment, backups, recovery, metrics, hardware requirements, and troubleshooting.
