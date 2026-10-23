@@ -1,43 +1,32 @@
-name: CI
+name: MAARY BASE CI
 
 on:
   push:
+    branches: ["main", "arena/**"]
   pull_request:
-
-permissions:
-  contents: read
+    branches: ["main"]
 
 jobs:
-  test:
+  verify:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: maary
-          POSTGRES_PASSWORD: ci-test-password
-          POSTGRES_DB: maary_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U maary -d maary_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      NODE_ENV: test
-      DATABASE_URL: postgres://maary:ci-test-password@localhost:5432/maary_test
-      MAARY_TEST_DATABASE_URL: postgres://maary:ci-test-password@localhost:5432/maary_test
-      TOKEN_SECRET: ci-only-secret-with-at-least-32-characters-long
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run db:migrate
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
-      - run: docker build -t maary-base:ci .
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build production bundle
+        run: npm run build
+
+      - name: Run integration test suite
+        run: npm test

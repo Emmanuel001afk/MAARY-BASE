@@ -3,39 +3,45 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: maary
-      POSTGRES_USER: maary
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-maary}
+      POSTGRES_USER: ${POSTGRES_USER:-maary}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this-local-password}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - maary_postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U maary -d maary"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-maary} -d ${POSTGRES_DB:-maary}"]
       interval: 5s
       timeout: 3s
       retries: 15
+
   api:
     build: .
     restart: unless-stopped
-    environment:
-      NODE_ENV: production
-      HOST: 0.0.0.0
-      PORT: 4100
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      DATABASE_URL: postgres://maary:${POSTGRES_PASSWORD}@database:5432/maary
-      TOKEN_SECRET: ${TOKEN_SECRET:?Set TOKEN_SECRET in .env}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
-    ports:
-      - "127.0.0.1:${PORT:-4100}:4100"
     depends_on:
       database:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4100/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      HOST: 0.0.0.0
+      PORT: 4100
+      DATABASE_URL: postgres://${POSTGRES_USER:-maary}:${POSTGRES_PASSWORD:-change-this-local-password}@database:5432/${POSTGRES_DB:-maary}
+      JWT_SECRET: ${JWT_SECRET:-maary-base-dev-jwt-secret-change-in-production-0123456789}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-maary-base-dev-encryption-master-key-change-in-prod-32b}
+      PLATFORM_BOOTSTRAP_TOKEN: ${PLATFORM_BOOTSTRAP_TOKEN:-maary-base-dev-bootstrap-token-change-in-production-0123456789}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      STORAGE_DIR: /app/storage
+      BACKUP_DIR: /app/data/backups
+      AUTO_MIGRATE: "true"
+      WORKER_ENABLED: "true"
+    ports:
+      - "127.0.0.1:${PORT:-4100}:4100"
+    volumes:
+      - maary_storage:/app/storage
+      - maary_data:/app/data
+
 volumes:
   maary_postgres:
+  maary_storage:
+  maary_data:
