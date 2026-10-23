@@ -47,9 +47,9 @@ function secretsEqual(candidate: string | undefined, expected: string): boolean 
 }
 
 async function lockPlatformBootstrap(client: DatabaseClient): Promise<void> {
-  // Embedded PGlite serializes a client transaction with its in-process mutex.
-  // External PostgreSQL needs a database-wide lock to prevent two simultaneous
-  // first registrations from both receiving the superadmin role.
+  // Acquire an exclusive table-level lock on platform_users within the transaction
+  // so concurrent registrations are strictly serialized on both PGlite and PostgreSQL.
+  await client.query("LOCK TABLE platform_users IN EXCLUSIVE MODE");
   if (!config.DATABASE_URL.startsWith("pglite://") && config.DATABASE_URL !== "memory://") {
     await client.query("SELECT pg_advisory_xact_lock(1346458194, 2)");
   }
@@ -96,9 +96,16 @@ export async function registerPlatformUser(input: {
 
     const insertRes = await client.query<PlatformUser>(
       `INSERT INTO platform_users (email, password_hash, name, is_superadmin, status, last_login_at)
-       VALUES ($1, $2, $3, $4, 'active', now())
+       VALUES (
+         $1,
+         $2,
+         $3,
+         NOT EXISTS (SELECT 1 FROM platform_users WHERE is_superadmin = true),
+         'active',
+         now()
+       )
        RETURNING id, email, name, is_superadmin, status, last_login_at, created_at, updated_at`,
-      [email, passwordHash, (input.name ?? "").trim() || email.split("@")[0]!, isFirstUser]
+      [email, passwordHash, (input.name ?? "").trim() || email.split("@")[0]!]
     );
     const user = insertRes.rows[0]!;
     const auth = await issuePlatformTokens(user, input.ipAddress, input.userAgent, client);

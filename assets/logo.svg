@@ -1,26 +1,57 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="MARRY BASE Logo">
-  <title>MARRY BASE Official Logo</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="MARRY BASE Official App Icon">
+  <title>MARRY BASE Official App Icon — Interlocking Union Rings (MARRY) on 3-Tier Isometric Database Pedestal (BASE)</title>
+  <desc>Two interlocking rings (Emerald Green and Radiant Gold) united by a central M monogram representing MARRY (the union of application and backend), resting upon a three-tier hexagonal obsidian-teal pedestal representing BASE (Database, Storage, and Security foundation).</desc>
   <defs>
-    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#10b981" />
-      <stop offset="100%" stop-color="#06b6d4" />
+    <linearGradient id="bgSquircle" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#162234" />
+      <stop offset="100%" stop-color="#090e17" />
     </linearGradient>
-    <linearGradient id="leftCyl" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#34d399" />
-      <stop offset="100%" stop-color="#059669" />
+    <linearGradient id="emeraldRing" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6ee7b7" />
+      <stop offset="50%" stop-color="#10b981" />
+      <stop offset="100%" stop-color="#047857" />
     </linearGradient>
-    <linearGradient id="rightCyl" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#22d3ee" />
-      <stop offset="100%" stop-color="#0284c7" />
+    <linearGradient id="goldRing" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fde68a" />
+      <stop offset="50%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#b45309" />
+    </linearGradient>
+    <linearGradient id="baseTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+    <linearGradient id="baseEdge" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0d9488" />
+      <stop offset="50%" stop-color="#14b8a6" />
+      <stop offset="100%" stop-color="#0f766e" />
     </linearGradient>
   </defs>
-  <rect width="256" height="256" rx="48" fill="#0b0f17" />
-  <path d="M128 24 L216 60 L216 132 C216 186 178 220 128 236 C78 220 40 186 40 132 L40 60 Z" fill="#111827" stroke="url(#shieldGrad)" stroke-width="8" />
-  <ellipse cx="88" cy="84" rx="26" ry="12" fill="url(#leftCyl)" />
-  <path d="M62 102 C62 109 74 114 88 114 C102 114 114 109 114 102 L114 122 C114 129 102 134 88 134 C74 134 62 129 62 122 Z" fill="url(#leftCyl)" />
-  <path d="M62 140 C62 147 74 152 88 152 C102 152 114 147 114 140 L114 164 C114 171 102 176 88 176 C74 176 62 171 62 164 Z" fill="url(#leftCyl)" />
-  <ellipse cx="168" cy="84" rx="26" ry="12" fill="url(#rightCyl)" />
-  <path d="M142 102 C142 109 154 114 168 114 C182 114 194 109 194 102 L194 122 C194 129 182 134 168 134 C154 134 142 129 142 122 Z" fill="url(#rightCyl)" />
-  <path d="M142 140 C142 147 154 152 168 152 C182 152 194 147 194 140 L194 164 C194 171 182 176 168 176 C154 176 142 171 142 164 Z" fill="url(#rightCyl)" />
-  <path d="M80 84 L128 136 L176 84" fill="none" stroke="url(#shieldGrad)" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" />
+
+  <!-- App Icon Squircle Background -->
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#bgSquircle)" stroke="#334155" stroke-width="3" />
+
+  <!-- BASE: 3-Tier Isometric Hexagonal Database Pedestal -->
+  <!-- Tier 3 (Bottom Foundation) -->
+  <polygon points="56,192 96,174 160,174 200,192 160,214 96,214" fill="url(#baseTop)" stroke="#2dd4bf" stroke-width="2" />
+  <polygon points="56,192 96,214 160,214 200,192 200,206 160,228 96,228 56,206" fill="url(#baseEdge)" opacity="0.85" />
+
+  <!-- Tier 2 (Middle Storage & Auth Layer) -->
+  <polygon points="68,174 102,158 154,158 188,174 154,192 102,192" fill="url(#baseTop)" stroke="#2dd4bf" stroke-width="2" />
+  <polygon points="68,174 102,192 154,192 188,174 188,186 154,204 102,204 68,186" fill="url(#baseEdge)" opacity="0.92" />
+
+  <!-- Tier 1 (Top Keystone Crown) -->
+  <polygon points="82,156 108,144 148,144 174,156 148,170 108,170" fill="url(#baseTop)" stroke="#5eead4" stroke-width="2.2" />
+  <polygon points="82,156 108,170 148,170 174,156 174,166 148,180 108,180 82,166" fill="url(#baseEdge)" />
+
+  <!-- MARRY: Two Interlocking Union Rings + Central 'M' Bridge -->
+  <!-- Left Emerald Ring -->
+  <circle cx="102" cy="104" r="46" fill="none" stroke="url(#emeraldRing)" stroke-width="14" />
+  <!-- Right Gold Ring -->
+  <circle cx="154" cy="104" r="46" fill="none" stroke="url(#goldRing)" stroke-width="14" />
+  <!-- Interlock Overpass (Emerald upper arc weaving over Gold ring) -->
+  <path d="M 122 63 A 46 46 0 0 1 148 104" fill="none" stroke="url(#emeraldRing)" stroke-width="14" stroke-linecap="round" />
+
+  <!-- Central 'M' Monogram Pillars Uniting Both Rings -->
+  <path d="M 92 140 L 92 86 L 128 118" fill="none" stroke="url(#emeraldRing)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M 128 118 L 164 86 L 164 140" fill="none" stroke="url(#goldRing)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" />
 </svg>

@@ -1,4 +1,6 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createInterface } from "node:readline";
 import vm from "node:vm";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
@@ -192,6 +194,370 @@ export async function deleteServerFunction(
   });
 }
 
+const ISOLATED_WORKER_SCRIPT = `
+"use strict";
+const vm = require("node:vm");
+const readline = require("node:readline");
+const crypto = require("node:crypto");
+
+// Remove network & process-spawning globals inside the isolated worker process
+delete globalThis.fetch;
+delete globalThis.WebSocket;
+delete globalThis.XMLHttpRequest;
+
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const pendingDb = new Map();
+let reqSeq = 0;
+
+function sendMsg(msg) {
+  process.stdout.write(JSON.stringify(msg) + "\\n");
+}
+
+rl.on("line", async (line) => {
+  if (!line || !line.trim()) return;
+  let msg;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return;
+  }
+
+  if (msg.type === "db_result") {
+    const p = pendingDb.get(msg.id);
+    if (p) {
+      pendingDb.delete(msg.id);
+      if (msg.error) p.reject(new Error(msg.error));
+      else p.resolve(msg.result);
+    }
+    return;
+  }
+
+  if (msg.type === "invoke") {
+    const logs = [];
+    const appendLog = (level, args) => {
+      if (logs.length >= 100) return;
+      const text = args
+        .map((a) => {
+          if (typeof a === "string") return a;
+          try {
+            return JSON.stringify(a);
+          } catch {
+            return String(a);
+          }
+        })
+        .join(" ")
+        .slice(0, 4096);
+      logs.push({ level, message: text, timestamp: new Date().toISOString() });
+    };
+
+    const hostLog = (level, ...args) => {
+      appendLog(level, args);
+    };
+    const hostDbQuery = (sql, params) =>
+      new Promise((resolve, reject) => {
+        const id = ++reqSeq;
+        pendingDb.set(id, { resolve, reject });
+        sendMsg({
+          type: "db_query",
+          id,
+          sql: String(sql),
+          params: Array.isArray(params) ? params : undefined,
+        });
+      });
+    const hostRandomUuid = () => crypto.randomUUID();
+
+    // Sever host function prototype chains before exposing to VM context
+    Object.setPrototypeOf(hostLog, null);
+    Object.setPrototypeOf(hostDbQuery, null);
+    Object.setPrototypeOf(hostRandomUuid, null);
+    Object.freeze(hostLog);
+    Object.freeze(hostDbQuery);
+    Object.freeze(hostRandomUuid);
+
+    // Lock down Function constructors in host worker realm
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    const GeneratorFunction = Object.getPrototypeOf(function* () {}).constructor;
+    for (const FnCtor of [Function, AsyncFunction, GeneratorFunction]) {
+      try {
+        Object.defineProperty(FnCtor.prototype, "constructor", {
+          value: null,
+          writable: false,
+          configurable: false,
+        });
+      } catch {}
+    }
+
+    const sandbox = Object.create(null);
+    sandbox.__hostLog = hostLog;
+    sandbox.__hostDbQuery = hostDbQuery;
+    sandbox.__hostRandomUuid = hostRandomUuid;
+    sandbox.__payloadJson = JSON.stringify({
+      invocationId: msg.invocationId,
+      req: msg.req,
+      auth: msg.auth,
+      env: msg.env,
+    });
+    sandbox.URL = URL;
+    sandbox.URLSearchParams = URLSearchParams;
+    sandbox.TextEncoder = TextEncoder;
+    sandbox.TextDecoder = TextDecoder;
+
+    const vmContext = vm.createContext(sandbox, {
+      codeGeneration: { strings: false, wasm: false },
+    });
+
+    // Initialize VM-realm objects and lock down VM-realm Function constructors
+    const initScript = new vm.Script(\`
+      (function() {
+        const AsyncFn = Object.getPrototypeOf(async function(){}).constructor;
+        const GenFn = Object.getPrototypeOf(function*(){}).constructor;
+        for (const C of [Function, AsyncFn, GenFn]) {
+          Object.defineProperty(C.prototype, "constructor", {
+            value: null,
+            writable: false,
+            configurable: false
+          });
+        }
+        const parsed = JSON.parse(__payloadJson);
+        delete globalThis.__payloadJson;
+        const logFn = __hostLog;
+        const dbFn = __hostDbQuery;
+        const uuidFn = __hostRandomUuid;
+        delete globalThis.__hostLog;
+        delete globalThis.__hostDbQuery;
+        delete globalThis.__hostRandomUuid;
+
+        globalThis.console = Object.freeze({
+          log: (...a) => logFn("info", ...a),
+          info: (...a) => logFn("info", ...a),
+          warn: (...a) => logFn("warn", ...a),
+          error: (...a) => logFn("error", ...a)
+        });
+        globalThis.crypto = Object.freeze({
+          randomUUID: () => uuidFn()
+        });
+        globalThis.module = { exports: {} };
+        globalThis.exports = globalThis.module.exports;
+        globalThis.__ctx = Object.freeze({
+          invocationId: parsed.invocationId,
+          req: Object.freeze({
+            method: parsed.req.method,
+            headers: Object.freeze(parsed.req.headers || {}),
+            query: Object.freeze(parsed.req.query || {}),
+            body: parsed.req.body
+          }),
+          auth: Object.freeze(parsed.auth || {}),
+          env: Object.freeze(parsed.env || {}),
+          db: Object.freeze({
+            query: async (sql, params) => {
+              const res = await dbFn(sql, params);
+              return JSON.parse(res);
+            }
+          })
+        });
+      })();
+    \`, { filename: "bootstrap.js" });
+
+    try {
+      initScript.runInContext(vmContext, { timeout: msg.timeoutMs });
+
+      const entrypoint = String(msg.entrypoint || "handler").replace(/[^a-zA-Z0-9_$]/g, "");
+      const wrappedCode = \`
+        \${msg.code}
+        ;(async () => {
+          const target =
+            (typeof \${entrypoint} === "function" ? \${entrypoint} : null) ||
+            (typeof handler === "function" ? handler : null) ||
+            (typeof module.exports === "function" ? module.exports : null) ||
+            (module.exports && typeof module.exports.\${entrypoint} === "function" ? module.exports.\${entrypoint} : null) ||
+            (module.exports && typeof module.exports.default === "function" ? module.exports.default : null);
+          if (!target) {
+            throw new Error("Function entrypoint '\${entrypoint}' was not found.");
+          }
+          return await target(__ctx);
+        })();
+      \`;
+
+      const userScript = new vm.Script(wrappedCode, { filename: msg.slug + ".js" });
+      const rawResult = await userScript.runInContext(vmContext, { timeout: msg.timeoutMs });
+      sendMsg({ type: "done", ok: true, data: rawResult === undefined ? null : rawResult, logs });
+      process.exit(0);
+    } catch (err) {
+      sendMsg({
+        type: "done",
+        ok: false,
+        error: err && err.message ? String(err.message) : String(err),
+        logs,
+      });
+      process.exit(0);
+    }
+  }
+});
+`;
+
+async function runInIsolatedProcess(params: {
+  slug: string;
+  code: string;
+  entrypoint: string;
+  timeoutMs: number;
+  invocationId: string;
+  req: {
+    method: string;
+    headers: Record<string, string>;
+    query: Record<string, unknown>;
+    body: unknown;
+  };
+  auth: {
+    role: string;
+    userId: string | null;
+    email: string | null;
+  };
+  env: Record<string, string>;
+  onDbQuery: (
+    sql: string,
+    queryParams?: unknown[]
+  ) => Promise<{ rows: unknown[]; rowCount: number }>;
+}): Promise<{
+  ok: boolean;
+  data?: unknown;
+  error?: string;
+  logs: Array<{ level: string; message: string; timestamp: string }>;
+}> {
+  return new Promise((resolvePromise) => {
+    const child = spawn(
+      process.execPath,
+      [
+        "--permission",
+        "--disallow-code-generation-from-strings",
+        "--max-old-space-size=64",
+        "-e",
+        ISOLATED_WORKER_SCRIPT,
+      ],
+      {
+        env: { NODE_ENV: "production" },
+        stdio: ["pipe", "pipe", "pipe"],
+      }
+    );
+
+    let settled = false;
+    let stderrBuf = "";
+    const finish = (result: {
+      ok: boolean;
+      data?: unknown;
+      error?: string;
+      logs: Array<{ level: string; message: string; timestamp: string }>;
+    }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(killTimer);
+      try {
+        child.kill("SIGKILL");
+      } catch {}
+      resolvePromise(result);
+    };
+
+    const killTimer = setTimeout(() => {
+      finish({
+        ok: false,
+        error: `Function execution timed out after ${params.timeoutMs}ms.`,
+        logs: [
+          {
+            level: "error",
+            message: `Function execution timed out after ${params.timeoutMs}ms.`,
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    }, params.timeoutMs + 150);
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrBuf += chunk.toString("utf8").slice(0, 2048);
+    });
+
+    const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    rl.on("line", async (line) => {
+      if (!line.trim()) return;
+      let msg: any;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        return;
+      }
+
+      if (msg.type === "db_query") {
+        try {
+          const dbRes = await params.onDbQuery(msg.sql, msg.params);
+          if (!settled && child.stdin.writable) {
+            child.stdin.write(
+              JSON.stringify({
+                type: "db_result",
+                id: msg.id,
+                result: JSON.stringify(dbRes),
+              }) + "\n"
+            );
+          }
+        } catch (err: any) {
+          if (!settled && child.stdin.writable) {
+            child.stdin.write(
+              JSON.stringify({
+                type: "db_result",
+                id: msg.id,
+                error: err?.message || "Database query failed",
+              }) + "\n"
+            );
+          }
+        }
+        return;
+      }
+
+      if (msg.type === "done") {
+        finish({
+          ok: Boolean(msg.ok),
+          data: msg.data,
+          error: msg.error,
+          logs: Array.isArray(msg.logs) ? msg.logs : [],
+        });
+      }
+    });
+
+    child.on("error", (err) => {
+      finish({
+        ok: false,
+        error: err.message || "Isolated worker process failed to start",
+        logs: [],
+      });
+    });
+
+    child.on("exit", (code, signal) => {
+      if (!settled) {
+        const isTimeout = signal === "SIGKILL" || /timed out/i.test(stderrBuf);
+        finish({
+          ok: false,
+          error: isTimeout
+            ? `Function execution timed out after ${params.timeoutMs}ms.`
+            : stderrBuf.trim() ||
+              `Isolated function worker exited unexpectedly (code ${code}, signal ${signal})`,
+          logs: [],
+        });
+      }
+    });
+
+    child.stdin.write(
+      JSON.stringify({
+        type: "invoke",
+        slug: params.slug,
+        code: params.code,
+        entrypoint: params.entrypoint,
+        timeoutMs: params.timeoutMs,
+        invocationId: params.invocationId,
+        req: params.req,
+        auth: params.auth,
+        env: params.env,
+      }) + "\n"
+    );
+  });
+}
+
 export async function invokeServerFunction(
   project: ProjectRecord,
   slug: string,
@@ -224,36 +590,42 @@ export async function invokeServerFunction(
   }
 
   const invocationId = randomUUID();
-  const logs: Array<{ level: string; message: string; timestamp: string }> = [];
-  const appendLog = (level: string, args: unknown[]) => {
-    if (logs.length >= 100) return;
-    const msg = args
-      .map((a) =>
-        typeof a === "string"
-          ? a
-          : (() => {
-              try {
-                return JSON.stringify(a);
-              } catch {
-                return String(a);
-              }
-            })()
-      )
-      .join(" ")
-      .slice(0, 4096);
-    logs.push({ level, message: msg, timestamp: new Date().toISOString() });
-  };
-
   const projectSecrets = await getDecryptedSecretsMap(project.id);
-  const envObj = Object.freeze({
+  const envObj: Record<string, string> = {
     ...projectSecrets,
     ...(fn.env_vars ?? {}),
     MAARY_PROJECT_ID: project.id,
     MAARY_PROJECT_SLUG: project.slug,
-  });
+  };
 
-  const dbBridge = Object.freeze({
-    query: async (sql: string, params?: unknown[]) => {
+  const timeoutMs = Math.min(fn.timeout_ms, config.FUNCTION_TIMEOUT_MS);
+  const started = Date.now();
+  let statusCode = 200;
+  let responseData: unknown = null;
+  let responseHeaders: Record<string, string> = {
+    "content-type": "application/json",
+  };
+  let errorMessage: string | null = null;
+
+  const workerResult = await runInIsolatedProcess({
+    slug: fn.slug,
+    code: fn.code,
+    entrypoint: fn.entrypoint,
+    timeoutMs,
+    invocationId,
+    req: {
+      method: request.method ?? "POST",
+      headers: { ...(request.headers ?? {}) },
+      query: { ...(request.query ?? {}) },
+      body: request.body ?? null,
+    },
+    auth: {
+      role: auth.role,
+      userId: auth.userId ?? null,
+      email: auth.email ?? null,
+    },
+    env: envObj,
+    onDbQuery: async (sql: string, params?: unknown[]) => {
       const res = await executeProjectSql(project, {
         sql,
         params,
@@ -269,91 +641,9 @@ export async function invokeServerFunction(
     },
   });
 
-  const ctx = Object.freeze({
-    invocationId,
-    req: Object.freeze({
-      method: request.method ?? "POST",
-      headers: Object.freeze({ ...(request.headers ?? {}) }),
-      query: Object.freeze({ ...(request.query ?? {}) }),
-      body: request.body ?? null,
-    }),
-    auth: Object.freeze({
-      role: auth.role,
-      userId: auth.userId ?? null,
-      email: auth.email ?? null,
-    }),
-    env: envObj,
-    db: dbBridge,
-  });
-
-  const sandbox: Record<string, unknown> = {
-    console: Object.freeze({
-      log: (...args: unknown[]) => appendLog("info", args),
-      info: (...args: unknown[]) => appendLog("info", args),
-      warn: (...args: unknown[]) => appendLog("warn", args),
-      error: (...args: unknown[]) => appendLog("error", args),
-    }),
-    JSON,
-    Math,
-    Date,
-    URL,
-    URLSearchParams,
-    TextEncoder,
-    TextDecoder,
-    crypto: Object.freeze({ randomUUID }),
-    module: { exports: {} },
-    exports: {},
-    __ctx: ctx,
-  };
-
-  const vmContext = vm.createContext(sandbox, {
-    codeGeneration: { strings: false, wasm: false },
-  });
-
-  const timeoutMs = Math.min(fn.timeout_ms, config.FUNCTION_TIMEOUT_MS);
-  const started = Date.now();
-  let statusCode = 200;
-  let responseData: unknown = null;
-  let responseHeaders: Record<string, string> = {
-    "content-type": "application/json",
-  };
-  let errorMessage: string | null = null;
-
-  try {
-    const wrappedCode = `
-      ${fn.code}
-      ;(async () => {
-        const target =
-          (typeof ${fn.entrypoint} === "function" ? ${fn.entrypoint} : null) ||
-          (typeof handler === "function" ? handler : null) ||
-          (typeof module.exports === "function" ? module.exports : null) ||
-          (module.exports && typeof module.exports.${fn.entrypoint} === "function" ? module.exports.${fn.entrypoint} : null) ||
-          (module.exports && typeof module.exports.default === "function" ? module.exports.default : null);
-        if (!target) {
-          throw new Error("Function entrypoint '${fn.entrypoint}' was not found.");
-        }
-        return await target(__ctx);
-      })();
-    `;
-
-    const script = new vm.Script(wrappedCode, { filename: `${slug}.js` });
-    const promiseOrVal = script.runInContext(vmContext, {
-      timeout: timeoutMs,
-    });
-
-    const rawResult = await Promise.race([
-      Promise.resolve(promiseOrVal),
-      new Promise((_, reject) =>
-        setTimeout(
-          () =>
-            reject(
-              new Error(`Function execution timed out after ${timeoutMs}ms.`)
-            ),
-          timeoutMs
-        )
-      ),
-    ]);
-
+  const logs = workerResult.logs;
+  if (workerResult.ok) {
+    const rawResult = workerResult.data;
     if (
       rawResult &&
       typeof rawResult === "object" &&
@@ -368,10 +658,16 @@ export async function invokeServerFunction(
     } else {
       responseData = rawResult;
     }
-  } catch (err: any) {
-    statusCode = /timed out/i.test(err?.message || "") ? 504 : 500;
-    errorMessage = err?.message || "Function execution failed";
-    appendLog("error", [errorMessage]);
+  } else {
+    errorMessage = workerResult.error || "Function execution failed";
+    statusCode = /timed out/i.test(errorMessage) ? 504 : 500;
+    if (!logs.some((l) => l.level === "error" && l.message === errorMessage)) {
+      logs.push({
+        level: "error",
+        message: errorMessage,
+        timestamp: new Date().toISOString(),
+      });
+    }
   }
 
   const durationMs = Date.now() - started;

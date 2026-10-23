@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="MARRY BASE Official App Icon">
+  <title>MARRY BASE Official App Icon — Interlocking Union Rings (MARRY) on 3-Tier Isometric Database Pedestal (BASE)</title>
+  <desc>Two interlocking rings (Emerald Green and Radiant Gold) united by a central M monogram representing MARRY (the union of application and backend), resting upon a three-tier hexagonal obsidian-teal pedestal representing BASE (Database, Storage, and Security foundation).</desc>
+  <defs>
+    <linearGradient id="bgSquircle" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#162234" />
+      <stop offset="100%" stop-color="#090e17" />
+    </linearGradient>
+    <linearGradient id="emeraldRing" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6ee7b7" />
+      <stop offset="50%" stop-color="#10b981" />
+      <stop offset="100%" stop-color="#047857" />
+    </linearGradient>
+    <linearGradient id="goldRing" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fde68a" />
+      <stop offset="50%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#b45309" />
+    </linearGradient>
+    <linearGradient id="baseTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+    <linearGradient id="baseEdge" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0d9488" />
+      <stop offset="50%" stop-color="#14b8a6" />
+      <stop offset="100%" stop-color="#0f766e" />
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#bgSquircle)" stroke="#334155" stroke-width="3" />
+  <polygon points="56,192 96,174 160,174 200,192 160,214 96,214" fill="url(#baseTop)" stroke="#2dd4bf" stroke-width="2" />
+  <polygon points="56,192 96,214 160,214 200,192 200,206 160,228 96,228 56,206" fill="url(#baseEdge)" opacity="0.85" />
+  <polygon points="68,174 102,158 154,158 188,174 154,192 102,192" fill="url(#baseTop)" stroke="#2dd4bf" stroke-width="2" />
+  <polygon points="68,174 102,192 154,192 188,174 188,186 154,204 102,204 68,186" fill="url(#baseEdge)" opacity="0.92" />
+  <polygon points="82,156 108,144 148,144 174,156 148,170 108,170" fill="url(#baseTop)" stroke="#5eead4" stroke-width="2.2" />
+  <polygon points="82,156 108,170 148,170 174,156 174,166 148,180 108,180 82,166" fill="url(#baseEdge)" />
+  <circle cx="102" cy="104" r="46" fill="none" stroke="url(#emeraldRing)" stroke-width="14" />
+  <circle cx="154" cy="104" r="46" fill="none" stroke="url(#goldRing)" stroke-width="14" />
+  <path d="M 122 63 A 46 46 0 0 1 148 104" fill="none" stroke="url(#emeraldRing)" stroke-width="14" stroke-linecap="round" />
+  <path d="M 92 140 L 92 86 L 128 118" fill="none" stroke="url(#emeraldRing)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M 128 118 L 164 86 L 164 140" fill="none" stroke="url(#goldRing)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

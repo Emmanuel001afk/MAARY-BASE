@@ -43,26 +43,29 @@ export interface SqlSafetyAnalysis {
 }
 
 export function analyzeProjectSql(sql: string): SqlSafetyAnalysis {
-  // Strip SQL comments for inspection
+  // Strip SQL comments for inspection, but ALSO inspect raw SQL so dollar-quoted blocks cannot hide role switches
   const cleaned = sql
     .replace(/--.*$/gm, " ")
     .replace(/\/\*[\s\S]*?\*\//g, " ")
     .trim();
 
   const normalized = cleaned.toLowerCase();
+  const rawLower = sql.toLowerCase();
 
-  // Check if query touches internal platform metadata tables or other project schemas
+  // Check if query touches internal platform metadata tables or system catalogs
   const touchesPlatformTables =
     /\bplatform_[a-z0-9_]+\b/i.test(cleaned) ||
     /\bproject_auth_[a-z0-9_]+\b/i.test(cleaned) ||
     /\bpg_shadow\b/i.test(cleaned) ||
-    /\bpg_authid\b/i.test(cleaned);
+    /\bpg_authid\b/i.test(cleaned) ||
+    /\b_marry_base_service_role_bypass\b/i.test(rawLower);
 
-  // Check if query tries to escalate role or bypass session configuration
+  // Check both comment-stripped and raw SQL (including inside $$ blocks) for role/session escalation
+  const roleEscalationRegex =
+    /\b(set\s+(session\s+|local\s+)?role|reset\s+role|reset\s+all|set\s+session\s+authorization|reset\s+session\s+authorization|alter\s+role|create\s+role|drop\s+role|grant\s+.*superuser|alter\s+system|copy\s+.*\bfrom\s+program|pg_read_file|pg_read_binary_file|pg_ls_dir|pg_execute_server_program|set_config\s*\(\s*['"]role['"])\b/i;
+
   const attemptsRoleEscalation =
-    /\b(set\s+(session\s+|local\s+)?role|reset\s+role|set\s+session\s+authorization|alter\s+role|create\s+role|drop\s+role|grant\s+.*superuser|alter\s+system|copy\s+.*\bfrom\s+program)\b/i.test(
-      cleaned
-    );
+    roleEscalationRegex.test(cleaned) || roleEscalationRegex.test(rawLower);
 
   // Check if query is destructive
   const isDestructive =
@@ -71,7 +74,7 @@ export function analyzeProjectSql(sql: string): SqlSafetyAnalysis {
     );
 
   const isWrite =
-    /\b(insert|update|delete|create|alter|drop|truncate|grant|revoke|comment|vacuum|analyze|refresh)\b/i.test(
+    /\b(insert|update|delete|create|alter|drop|truncate|grant|revoke|comment|vacuum|analyze|refresh|do|call)\b/i.test(
       normalized
     );
 

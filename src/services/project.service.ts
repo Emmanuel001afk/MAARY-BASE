@@ -134,36 +134,67 @@ export async function createProject(input: {
   const serviceGenerated = generateApiKey("service");
 
   const result = await withTransaction(async (client) => {
+    const rlsRoleName = `${dbRoleName}_rls`;
+    assertValidIdentifier(rlsRoleName, "role");
     const roleIdent = quoteIdent(dbRoleName);
+    const rlsRoleIdent = quoteIdent(rlsRoleName);
     const schemaIdent = quoteIdent(schemaName);
 
     await client.query(`
       DO $$
       BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${dbRoleName}') THEN
-          CREATE ROLE ${roleIdent} NOLOGIN;
+          CREATE ROLE ${roleIdent} NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${rlsRoleName}') THEN
+          CREATE ROLE ${rlsRoleIdent} NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
         END IF;
       END
       $$;
     `);
-    await client.query(`CREATE SCHEMA IF NOT EXISTS ${schemaIdent}`);
+    await client.query(`CREATE SCHEMA IF NOT EXISTS ${schemaIdent} AUTHORIZATION ${roleIdent}`);
+    await client.query(`ALTER SCHEMA ${schemaIdent} OWNER TO ${roleIdent}`);
     await client.query(
-      `GRANT USAGE ON SCHEMA auth TO ${roleIdent}, maary_rls_user`
+      `REVOKE ALL ON SCHEMA ${schemaIdent} FROM PUBLIC, maary_rls_user, maary_anon, maary_authenticated, maary_service_role`
     );
     await client.query(
-      `GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO ${roleIdent}, maary_rls_user`
+      `GRANT ALL ON SCHEMA ${schemaIdent} TO ${roleIdent}`
     );
     await client.query(
-      `GRANT USAGE ON SCHEMA ${schemaIdent} TO ${roleIdent}, maary_rls_user, maary_anon, maary_authenticated, maary_service_role`
+      `GRANT USAGE ON SCHEMA ${schemaIdent} TO ${rlsRoleIdent}`
     );
     await client.query(
-      `ALTER DEFAULT PRIVILEGES IN SCHEMA ${schemaIdent} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${roleIdent}, maary_rls_user`
+      `REVOKE CREATE ON SCHEMA public FROM PUBLIC, ${roleIdent}, ${rlsRoleIdent}`
     );
     await client.query(
-      `ALTER DEFAULT PRIVILEGES IN SCHEMA ${schemaIdent} GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO ${roleIdent}, maary_rls_user`
+      `REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC, ${roleIdent}, ${rlsRoleIdent}`
     );
     await client.query(
-      `ALTER DEFAULT PRIVILEGES IN SCHEMA ${schemaIdent} GRANT EXECUTE ON FUNCTIONS TO ${roleIdent}, maary_rls_user`
+      `REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, ${roleIdent}, ${rlsRoleIdent}`
+    );
+    await client.query(
+      `GRANT USAGE ON SCHEMA auth TO ${roleIdent}, ${rlsRoleIdent}, maary_rls_user`
+    );
+    await client.query(
+      `GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO ${roleIdent}, ${rlsRoleIdent}, maary_rls_user`
+    );
+    await client.query(
+      `ALTER DEFAULT PRIVILEGES FOR ROLE ${roleIdent} IN SCHEMA ${schemaIdent} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${rlsRoleIdent}`
+    );
+    await client.query(
+      `ALTER DEFAULT PRIVILEGES FOR ROLE ${roleIdent} IN SCHEMA ${schemaIdent} GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO ${rlsRoleIdent}`
+    );
+    await client.query(
+      `ALTER DEFAULT PRIVILEGES FOR ROLE ${roleIdent} IN SCHEMA ${schemaIdent} GRANT EXECUTE ON FUNCTIONS TO ${rlsRoleIdent}`
+    );
+    await client.query(
+      `ALTER DEFAULT PRIVILEGES IN SCHEMA ${schemaIdent} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${roleIdent}, ${rlsRoleIdent}`
+    );
+    await client.query(
+      `ALTER DEFAULT PRIVILEGES IN SCHEMA ${schemaIdent} GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO ${roleIdent}, ${rlsRoleIdent}`
+    );
+    await client.query(
+      `ALTER DEFAULT PRIVILEGES IN SCHEMA ${schemaIdent} GRANT EXECUTE ON FUNCTIONS TO ${roleIdent}, ${rlsRoleIdent}`
     );
 
     const projRes = await client.query<ProjectRecord>(

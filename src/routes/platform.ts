@@ -64,6 +64,8 @@ export async function registerPlatformRoutes(
       branding: {
         logoPngUrl: "/v1/platform/logo",
         logoSvgUrl: "/v1/platform/logo.svg",
+        appIconPngUrl: "/v1/platform/app-icon",
+        appIconSvgUrl: "/v1/platform/app-icon.svg",
         apkDownloadUrl: "/v1/platform/apk/download",
       },
       database: {
@@ -90,7 +92,7 @@ export async function registerPlatformRoutes(
     };
   });
 
-  // Platform Logo Endpoints
+  // Platform Logo & App Icon Endpoints
   app.get("/v1/platform/logo", async (_request, reply) => {
     const logoPath = resolve(process.cwd(), "assets", "logo.png");
     const buf = await readFile(logoPath);
@@ -99,6 +101,18 @@ export async function registerPlatformRoutes(
 
   app.get("/v1/platform/logo.svg", async (_request, reply) => {
     const svgPath = resolve(process.cwd(), "assets", "logo.svg");
+    const buf = await readFile(svgPath);
+    return reply.header("content-type", "image/svg+xml").send(buf);
+  });
+
+  app.get("/v1/platform/app-icon", async (_request, reply) => {
+    const iconPath = resolve(process.cwd(), "assets", "app-icon.png");
+    const buf = await readFile(iconPath);
+    return reply.header("content-type", "image/png").send(buf);
+  });
+
+  app.get("/v1/platform/app-icon.svg", async (_request, reply) => {
+    const svgPath = resolve(process.cwd(), "assets", "app-icon.svg");
     const buf = await readFile(svgPath);
     return reply.header("content-type", "image/svg+xml").send(buf);
   });
