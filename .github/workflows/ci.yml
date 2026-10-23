@@ -55,6 +55,10 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # "tools" is no longer a valid SDK package. The action defaults to
+          # installing it, so explicitly request only platform-tools.
+          packages: "platform-tools"
 
       - name: Setup Gradle 8.2.1
         uses: gradle/actions/setup-gradle@v4
