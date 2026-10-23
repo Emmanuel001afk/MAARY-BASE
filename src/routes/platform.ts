@@ -9,10 +9,6 @@ import {
   optionalPlatformUser,
   requirePlatformUser,
 } from "../middleware/auth.middleware.js";
-import {
-  buildMarryBaseApk,
-  getOrBuildDefaultApk,
-} from "../services/apk.service.js";
 import { listAuditEvents } from "../services/audit.service.js";
 import {
   createDatabaseBackup,
@@ -67,7 +63,6 @@ export async function registerPlatformRoutes(
       branding: {
         logoPngUrl: "/v1/platform/logo",
         logoSvgUrl: "/v1/platform/logo.svg",
-        apkDownloadUrl: "/v1/platform/apk/download",
       },
       database: {
         engine: "PostgreSQL",
@@ -88,7 +83,7 @@ export async function registerPlatformRoutes(
         backupsAndRecovery: "operational",
         administrationDashboard: "operational",
         cliAndSdk: "operational",
-        mobileApkBuilder: "operational",
+        mobileApkBuilder: "unavailable",
       },
     };
   });
@@ -106,51 +101,15 @@ export async function registerPlatformRoutes(
     return reply.header("content-type", "image/svg+xml").send(buf);
   });
 
-  // APK Build & Download Endpoints
-  app.post("/v1/platform/apk/build", async (request, reply) => {
-    const user = await optionalPlatformUser(request);
-    const body = (request.body ?? {}) as {
-      projectSlug?: string;
-      serverUrl?: string;
-      versionName?: string;
-      versionCode?: number;
-    };
-    const apk = await buildMarryBaseApk({
-      projectSlug: body.projectSlug,
-      serverUrl: body.serverUrl,
-      versionName: body.versionName,
-      versionCode: body.versionCode,
-      actorId: user?.id ?? null,
+  // APK generation is deliberately disabled until this repository has a real
+  // Android build pipeline. ZIP-shaped output is not a valid installable APK.
+  const apkBuildUnavailable = async (_request: unknown, reply: any) =>
+    reply.code(501).send({
+      error: "not_implemented",
+      message: "APK generation requires a real Android build pipeline and is not available from this server.",
     });
-    return reply.code(201).send({
-      apk: {
-        ...apk,
-        downloadUrl: `/v1/platform/apk/download${apk.projectSlug ? `?projectSlug=${encodeURIComponent(apk.projectSlug)}` : ""}`,
-      },
-    });
-  });
-
-  app.get("/v1/platform/apk/download", async (request, reply) => {
-    const q = (request.query ?? {}) as { projectSlug?: string };
-    if (q.projectSlug) {
-      const info = await buildMarryBaseApk({ projectSlug: q.projectSlug });
-      const buf = await readFile(info.filePath);
-      return reply
-        .header("content-type", "application/vnd.android.package-archive")
-        .header(
-          "content-disposition",
-          `attachment; filename="${info.fileName}"`
-        )
-        .header("x-apk-sha256", info.checksumSha256)
-        .send(buf);
-    }
-    const { info, buffer } = await getOrBuildDefaultApk();
-    return reply
-      .header("content-type", "application/vnd.android.package-archive")
-      .header("content-disposition", `attachment; filename="${info.fileName}"`)
-      .header("x-apk-sha256", info.checksumSha256)
-      .send(buffer);
-  });
+  app.post("/v1/platform/apk/build", apkBuildUnavailable);
+  app.get("/v1/platform/apk/download", apkBuildUnavailable);
 
   // Platform Operator Auth
   app.post("/v1/platform/auth/register", async (request, reply) => {
