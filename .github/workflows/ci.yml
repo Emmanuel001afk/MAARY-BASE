@@ -2,7 +2,7 @@ name: MAARY BASE CI
 
 on:
   push:
-    branches: ["main", "arena/**"]
+    branches: ["main", "arena/**", "fix/**"]
   pull_request:
     branches: ["main"]
 
