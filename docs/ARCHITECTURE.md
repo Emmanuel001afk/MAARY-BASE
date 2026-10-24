@@ -1,4 +1,4 @@
-# MARRY BASE Architecture
+# MARI BASE Architecture
 
 ## 1. Layered System Boundaries
 

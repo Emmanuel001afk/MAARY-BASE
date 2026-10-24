@@ -1,4 +1,4 @@
-name: MARRY BASE CI
+name: MARI BASE CI
 
 on:
   push:
@@ -124,11 +124,11 @@ jobs:
           fi
           cat /tmp/gradle.log | tail -n 30
           mkdir -p releases
-          cp android/app/build/outputs/apk/debug/app-debug.apk releases/marry-base-android.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk releases/mari-base-android.apk
 
       - name: Verify compiled APK structure & Android apksigner signature
         run: |
-          if ! node scripts/verify-apk.mjs releases/marry-base-android.apk --require-apksigner > /tmp/verify.log 2>&1; then
+          if ! node scripts/verify-apk.mjs releases/mari-base-android.apk --require-apksigner > /tmp/verify.log 2>&1; then
             cat /tmp/verify.log
             msg=$(tail -n 20 /tmp/verify.log | tr '\n' ' ' | cut -c 1-900)
             echo "::error title=VerifyApkFailed::${msg}"
@@ -136,10 +136,10 @@ jobs:
           fi
           cat /tmp/verify.log
 
-      - name: Upload MARRY BASE Android APK artifact
+      - name: Upload MARI BASE Android APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: marry-base-android-apk
-          path: releases/marry-base-android.apk
+          name: mari-base-android-apk
+          path: releases/mari-base-android.apk
           if-no-files-found: error
           retention-days: 30

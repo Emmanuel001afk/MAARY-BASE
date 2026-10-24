@@ -1,8 +1,8 @@
-window.__MARRY_BASE_CONFIG__ = Object.freeze({
-  platform: "MARRY BASE",
+window.__MARI_BASE_CONFIG__ = Object.freeze({
+  platform: "MARI BASE",
   packageName: "com.marrybase.platform",
-  versionName: "1.0.0",
-  versionCode: 1,
+  versionName: "1.1.0",
+  versionCode: 2,
   projectSlug: null,
   serverUrl: "http://10.0.2.2:4100"
 });

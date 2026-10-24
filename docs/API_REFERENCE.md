@@ -1,4 +1,4 @@
-# MARRY BASE API Reference
+# MARI BASE API Reference
 
 All project-scoped endpoints accept either a `:projectRef` slug (e.g. `acme-api`) or UUID.
 

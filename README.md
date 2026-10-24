@@ -1,10 +1,10 @@
-# MARRY BASE
+# MARI BASE
 
 <p align="center">
-  <img src="assets/logo.png" alt="MARRY BASE Official Logo" width="180" />
+  <img src="assets/logo.png" alt="MARI BASE Official Logo" width="180" />
 </p>
 
-**MARRY BASE** (aliased as `MAARY BASE`) is a self-hostable backend development platform built on PostgreSQL, TypeScript, and Fastify. It combines an operator Management Studio, workspaces/organizations, multi-project PostgreSQL schema and role isolation, native Row-Level Security (RLS), end-user authentication, auto-generated REST and RPC Data APIs, object storage, WebSocket realtime streams, isolated child-worker server functions, durable background jobs, SHA-256 verified backups, a CLI, a TypeScript SDK, and a native **Android companion app** compiled via an authentic Gradle build pipeline.
+**MARI BASE** is a self-hostable backend development platform built on PostgreSQL, TypeScript, and Fastify. It combines an operator Management Studio, workspaces/organizations, multi-project PostgreSQL schema and role isolation, native Row-Level Security (RLS), end-user authentication, auto-generated REST and RPC Data APIs, object storage, WebSocket realtime streams, isolated child-worker server functions, durable background jobs, SHA-256 verified backups, a CLI, a TypeScript SDK, and a native **Android companion app** compiled via an authentic Gradle build pipeline.
 
 ---
 
@@ -43,7 +43,7 @@ npm run db:migrate
 npm run dev
 ```
 
-Open `http://localhost:4100` to enter the **MARRY BASE Management Studio**. In development mode, the first account registered automatically receives initial **Superadmin** privileges and a default workspace.
+Open `http://localhost:4100` to enter the **MARI BASE Management Studio**. In development mode, the first account registered automatically receives initial **Superadmin** privileges and a default workspace.
 
 ### 2. Production Docker Compose (PostgreSQL 16)
 
@@ -61,7 +61,7 @@ When `NODE_ENV=production`, registering the very first Superadmin account requir
 
 ## Building & Verifying the Android APK
 
-MARRY BASE builds its Android companion app exclusively from the native Gradle project in `android/` — never from fabricated archive bytes.
+MARI BASE builds its Android companion app exclusively from the native Gradle project in `android/` — never from fabricated archive bytes.
 
 ### Prerequisites for Local Android Builds
 - JDK 17+ (`java`)
@@ -69,22 +69,22 @@ MARRY BASE builds its Android companion app exclusively from the native Gradle p
 - Gradle 8.7+ (`gradle`)
 
 ```bash
-# Compile and sign the debug APK via Gradle and copy to releases/marry-base-android.apk
+# Compile and sign the debug APK via Gradle and copy to releases/mari-base-android.apk
 gradle --project-dir android assembleDebug lintDebug --no-daemon --stacktrace
 mkdir -p releases
-cp android/app/build/outputs/apk/debug/app-debug.apk releases/marry-base-android.apk
+cp android/app/build/outputs/apk/debug/app-debug.apk releases/mari-base-android.apk
 
 # Verify ZIP structure, binary AXML AndroidManifest.xml, resources.arsc, classes.dex, and apksigner signature
-node scripts/verify-apk.mjs releases/marry-base-android.apk --require-apksigner
+node scripts/verify-apk.mjs releases/mari-base-android.apk --require-apksigner
 ```
 
-Or invoke via the MARRY BASE CLI when the Android toolchain is installed locally:
+Or invoke via the MARI BASE CLI when the Android toolchain is installed locally:
 
 ```bash
 npm run build:android
 ```
 
-In GitHub Actions (`.github/workflows/ci.yml`), the `android` job provisions JDK 17, Android SDK 34, and Gradle 8.7, compiles `assembleDebug lintDebug`, runs `scripts/verify-apk.mjs --require-apksigner`, and uploads `releases/marry-base-android.apk` as the downloadable `marry-base-android-apk` workflow artifact.
+In GitHub Actions (`.github/workflows/ci.yml`), the `android` job provisions JDK 17, Android SDK 34, and Gradle 8.7, compiles `assembleDebug lintDebug`, runs `scripts/verify-apk.mjs --require-apksigner`, and uploads `releases/mari-base-android.apk` as the downloadable `mari-base-android-apk` workflow artifact.
 
 ---
 
