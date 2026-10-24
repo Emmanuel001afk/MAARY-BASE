@@ -1,0 +1,13 @@
+.git
+.gitignore
+node_modules
+dist
+coverage
+data
+storage
+android/.gradle
+android/app/build
+android/local.properties
+*.log
+.env
+.DS_Store
