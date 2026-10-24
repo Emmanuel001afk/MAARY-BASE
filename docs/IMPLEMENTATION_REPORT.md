@@ -397,4 +397,7 @@ Review order suggestion: `docs/VERIFICATION.md` → this report → `docker-comp
 - `failed` — a check actively failed (invalid APK artifact, worker enabled but not running).
 - `missing` — the artifact/component does not exist yet (e.g. no built APK).
 
+`/v1/platform.services.androidCompanion` reports one of these words; the raw artifact state
+(`available`/`missing`/`invalid`) stays in `/v1/platform.android.state`.
+
 Overall `/v1/platform` state is derived from these checks; the derivation is code, not a literal.

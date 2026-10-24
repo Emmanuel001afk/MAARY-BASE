@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import test from "node:test";
 import { inflateRawSync } from "node:zlib";
 import { buildApp } from "./app.js";
+import { isolateApkArtifact } from "./test-support/apk-fixture.js";
 
 test("health and readiness endpoints return operational status and MARRY BASE platform identity", async () => {
   const app = await buildApp();
@@ -52,7 +53,16 @@ test("health and readiness endpoints return operational status and MARRY BASE pl
     assert.equal(platformBody.database.engine, "PostgreSQL");
     assert.equal(platformBody.branding.logoPngUrl, "/v1/platform/logo");
     assert.equal(platformBody.branding.logoSvgUrl, "/v1/platform/logo.svg");
-    assert.ok(["available", "missing", "invalid"].includes(platformBody.services.androidCompanion));
+    // The companion service uses the platform state vocabulary; the raw
+    // artifact state stays in `android.state`.
+    assert.equal(
+      platformBody.services.androidCompanion,
+      platformBody.android.state === "available"
+        ? "operational"
+        : platformBody.android.state === "invalid"
+          ? "failed"
+          : "missing"
+    );
     assert.ok(["not_built", "available", "invalid_artifact", "build_available"].includes(platformBody.android.statusLabel));
 
     const metricsJsonRes = await app.inject({
@@ -144,6 +154,9 @@ test("dashboard routes serve MARRY BASE management interface, logo, and assets",
 });
 
 test("Android artifact endpoints report real build status and never fabricate a package", async () => {
+  // Never inspect or mutate the shared releases/ artifact: the Gradle job owns
+  // it and other suites tamper with it concurrently.
+  const restoreApkArtifact = await isolateApkArtifact();
   const app = await buildApp();
   try {
     const anonymousStatus = await app.inject({ method: "GET", url: "/v1/platform/apk/status" });
@@ -210,6 +223,7 @@ test("Android artifact endpoints report real build status and never fabricate a 
     }
   } finally {
     await app.close();
+    await restoreApkArtifact();
   }
 });
 

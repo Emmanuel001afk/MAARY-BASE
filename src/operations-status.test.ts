@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildApp } from "./app.js";
+import { isolateApkArtifact } from "./test-support/apk-fixture.js";
 
 async function register(app: Awaited<ReturnType<typeof buildApp>>, label: string) {
   const response = await app.inject({
@@ -17,6 +18,9 @@ async function register(app: Awaited<ReturnType<typeof buildApp>>, label: string
 }
 
 test("Operational status, logs, roles, connection and API catalogue reflect real state", async () => {
+  // The platform summary reports the Android artifact, so this suite gets its
+  // own copy instead of observing another suite's tampering.
+  const restoreApkArtifact = await isolateApkArtifact();
   const app = await buildApp();
   try {
     const operator = await register(app, "ops");
@@ -286,5 +290,6 @@ test("Operational status, logs, roles, connection and API catalogue reflect real
     assert.equal(viewerWrite.statusCode, 403, viewerWrite.body);
   } finally {
     await app.close();
+    await restoreApkArtifact();
   }
 });

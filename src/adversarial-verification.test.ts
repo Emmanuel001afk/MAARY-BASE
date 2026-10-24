@@ -8,6 +8,7 @@ import test from "node:test";
 import { inflateRawSync } from "node:zlib";
 import { buildApp } from "./app.js";
 import { config } from "./config.js";
+import { isolateApkArtifact } from "./test-support/apk-fixture.js";
 import { S3StorageAdapter } from "./services/storage.service.js";
 
 test("Critical #1: Server function isolated OS subprocess blocks sandbox escapes, filesystem access, secret leaks, and infinite loops", async () => {
@@ -251,6 +252,8 @@ test("Critical #2: Database privilege boundary enforces non-superuser role isola
 });
 
 test("Critical #3: Android APK delivery is verified and cannot be fabricated by the server", async () => {
+  // Work on a private copy: this test removes and corrupts the artifact.
+  const restoreApkArtifact = await isolateApkArtifact();
   const app = await buildApp();
   const artifactPath = resolve(process.cwd(), config.APK_ARTIFACT_PATH);
   const metadataPath = resolve(process.cwd(), config.APK_METADATA_PATH);
@@ -322,6 +325,7 @@ test("Critical #3: Android APK delivery is verified and cannot be fabricated by 
       await rm(metadataPath, { force: true });
     }
     await app.close();
+    await restoreApkArtifact();
   }
 });
 

@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { buildApp } from "./app.js";
+import { isolateApkArtifact } from "./test-support/apk-fixture.js";
 
 /**
  * Workflow-level studio test. Where studio.test.ts proves that each section
@@ -130,6 +131,7 @@ async function apiJson(
 }
 
 test("Studio controls execute real workflows against the server", async () => {
+  const restoreApkArtifact = await isolateApkArtifact();
   const harness = await bootStudio();
   const { app, dom, window, base, core, pages, actions, session, studioFetch } = harness;
   const token = session.accessToken as string;
@@ -474,5 +476,6 @@ test("Studio controls execute real workflows against the server", async () => {
   } finally {
     dom.window.close();
     await app.close();
+    await restoreApkArtifact();
   }
 });

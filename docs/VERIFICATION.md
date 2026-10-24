@@ -117,7 +117,11 @@ Additional manual checks (executed):
   without RLS).
 - `requires_configuration` — the platform supports it but an operator action is needed first.
 - `unavailable` — a dependency (database, storage backend, worker) prevents operation.
-- `failed` — a check actively failed (invalid APK artifact, worker enabled but not running, …).
+- `failed` — a check actively failed (an invalid APK artifact, a worker enabled but not running, …).
+- `missing` — the artifact or component has not been produced on this instance yet (no built APK).
+
+`/v1/platform` maps artifact states into this vocabulary (`available` → `operational`,
+`invalid` → `failed`, `missing` → `missing`) and keeps the raw artifact state in `android.state`.
 
 `overall` on `/v1/platform/status` is derived from these per-service states; `requires_configuration`
 is not upgraded to `operational`.

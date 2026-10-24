@@ -74,6 +74,10 @@ export async function registerPlatformRoutes(
 
     const workerRunning = workerSupervisor.isRunning();
     const apk = await getApkStatus();
+    // The artifact states ("available"/"missing"/"invalid") describe the build
+    // artifact; the service map below uses the platform-wide state vocabulary.
+    const androidServiceState =
+      apk.state === "available" ? "operational" : apk.state === "invalid" ? "failed" : "missing";
 
     // Public service states are derived from the same control-plane data as the
     // authenticated status page; nothing here is hard-coded to "operational".
@@ -179,7 +183,7 @@ export async function registerPlatformRoutes(
           existsSync(resolve(process.cwd(), "dist", "sdk", "index.js"))
           ? "operational"
           : "unavailable",
-        androidCompanion: apk.state,
+        androidCompanion: androidServiceState,
       },
       android: {
         state: apk.state,
