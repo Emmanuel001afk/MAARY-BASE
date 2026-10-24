@@ -4,6 +4,18 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { inflateRawSync } from "node:zlib";
 
+/** Prints an actionable message instead of a Node stack trace. */
+function fail(message) {
+  process.stderr.write(`APK verification failed: ${message}\n`);
+  process.exit(1);
+}
+
+// Unexpected parser errors (truncated archives, bad deflate streams) are also
+// reported as verification failures rather than as unhandled exceptions.
+process.on("uncaughtException", (error) => {
+  fail(error instanceof Error ? error.message : String(error));
+});
+
 const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith("--")));
 const requireApksigner = flags.has("--require-apksigner");
@@ -13,19 +25,26 @@ const apkPath = resolve(
 );
 
 if (!existsSync(apkPath)) {
-  throw new Error(`APK file does not exist: ${apkPath}`);
+  fail(
+    `APK file does not exist: ${apkPath}. Build it with \`npm run android:build\` ` +
+      "on a host with a JDK and the Android SDK, or download the CI artifact."
+  );
 }
 
 const fileStat = statSync(apkPath);
 if (!fileStat.isFile() || fileStat.size < 10_240) {
-  throw new Error(
-    `APK file is empty or unexpectedly small (${fileStat.size} bytes): ${apkPath}`
+  fail(
+    `APK file is empty or unexpectedly small (${fileStat.size} bytes): ${apkPath}. ` +
+      "A real Android package is always larger than 10 KB."
   );
 }
 
 const buf = readFileSync(apkPath);
 if (buf.readUInt32LE(0) !== 0x04034b50) {
-  throw new Error(`Invalid ZIP local header magic in ${apkPath}`);
+  fail(
+    `Not a ZIP archive (missing local file header): ${apkPath}. ` +
+      "An APK is a ZIP container; this file is something else."
+  );
 }
 
 let eocdOffset = -1;
@@ -40,7 +59,7 @@ for (let offset = buf.length - 22; offset >= minOffset; offset -= 1) {
   }
 }
 if (eocdOffset < 0) {
-  throw new Error(`Missing ZIP End of Central Directory (EOCD) in ${apkPath}`);
+  fail(`Missing ZIP End of Central Directory (EOCD) in ${apkPath}`);
 }
 
 const totalEntries = buf.readUInt16LE(eocdOffset + 10);
@@ -64,7 +83,7 @@ for (let i = 0; i < totalEntries && ptr + 46 <= eocdOffset; i += 1) {
 function extractEntry(name) {
   const meta = entries.get(name);
   if (!meta) {
-    throw new Error(`APK is missing required entry '${name}'`);
+    fail(`APK is missing required entry '${name}'`);
   }
   const lNameLen = buf.readUInt16LE(meta.localOffset + 26);
   const lExtraLen = buf.readUInt16LE(meta.localOffset + 28);
@@ -75,26 +94,26 @@ function extractEntry(name) {
 
 const manifest = extractEntry("AndroidManifest.xml");
 if (manifest.readUInt16LE(0) !== 0x0003) {
-  throw new Error("AndroidManifest.xml is not compiled binary AXML (0x0003)");
+  fail("AndroidManifest.xml is not compiled binary AXML (0x0003)");
 }
 
 const arsc = extractEntry("resources.arsc");
 if (arsc.readUInt16LE(0) !== 0x0002) {
-  throw new Error("resources.arsc is not a compiled Android resource table (0x0002)");
+  fail("resources.arsc is not a compiled Android resource table (0x0002)");
 }
 
 const dexNames = [...entries.keys()].filter((name) =>
   /^classes\d*\.dex$/.test(name)
 );
 if (!dexNames.includes("classes.dex")) {
-  throw new Error("APK is missing required entry 'classes.dex'");
+  fail("APK is missing required entry 'classes.dex'");
 }
 
 let foundMainActivity = false;
 for (const dexName of dexNames) {
   const dex = extractEntry(dexName);
   if (dex.subarray(0, 4).toString("ascii") !== "dex\n") {
-    throw new Error(
+    fail(
       `${dexName} does not begin with Dalvik executable magic ('dex\\n')`
     );
   }
@@ -103,7 +122,7 @@ for (const dexName of dexNames) {
   }
 }
 if (!foundMainActivity) {
-  throw new Error(
+  fail(
     `No DEX entry (${dexNames.join(", ")}) contains compiled MainActivity class`
   );
 }
@@ -135,12 +154,14 @@ if (apksigner) {
   if (res.status !== 0) {
     process.stderr.write(res.stdout || "");
     process.stderr.write(res.stderr || "");
-    throw new Error(`Android apksigner rejected ${apkPath}`);
+    fail(`Android apksigner rejected ${apkPath}`);
   }
   process.stdout.write(res.stdout);
 } else if (requireApksigner) {
-  throw new Error(
-    "apksigner was required (--require-apksigner) but not found in PATH or ANDROID_SDK_ROOT/build-tools."
+  fail(
+    "apksigner was required (--require-apksigner) but was not found in PATH, " +
+      "ANDROID_SDK_ROOT/build-tools or ANDROID_HOME/build-tools. " +
+      "Install Android SDK build-tools or unset --require-apksigner."
   );
 }
 
