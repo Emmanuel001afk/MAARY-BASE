@@ -247,7 +247,22 @@ test("Operational status, logs, roles, connection and API catalogue reflect real
     // Unconfigured subsystems keep the overall platform honest.
     assert.notEqual(platform.overall, "operational");
     assert.ok(["partially_implemented", "requires_configuration"].includes(platform.overall));
-    assert.ok(platform.android.state === "available" || platform.android.state === "missing");
+    if (!["available", "missing"].includes(platform.android.state)) {
+      const detail = await app.inject({
+        method: "GET",
+        url: "/v1/platform/apk/status",
+        headers: { authorization: `Bearer ${operator.token}` },
+      });
+      const inspection = detail.json();
+      assert.fail(
+        `Unexpected companion state: ${JSON.stringify({
+          android: platform.android,
+          artifactState: inspection.state,
+          problems: inspection.verification?.problems,
+          artifact: inspection.artifact,
+        })}`
+      );
+    }
     assert.equal(typeof platform.android.summary, "string");
 
     const publicPlatform = await app.inject({ method: "GET", url: "/v1/platform" });
