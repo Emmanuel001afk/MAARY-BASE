@@ -226,8 +226,29 @@ jobs:
       - name: Verify the downloaded APK signature with Android apksigner
         run: npm run verify:apk
 
+      # Test output is echoed as annotations so a CI-only failure is readable
+      # even when the raw job log is not retrievable.
       - name: Run integration test suites
-        run: npm test
+        run: |
+          set +e
+          npm test 2>&1 | tee /tmp/npm-test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "::error::npm test exited $status ($(grep -c '^not ok' /tmp/npm-test.log) failing tests)"
+            awk '
+              /^not ok / {
+                count++
+                if (count > 5) next
+                block = $0
+                for (i = 0; i < 10; i++) {
+                  if ((getline line) > 0) block = block " |" line
+                }
+                print "::error::" block
+              }
+            ' /tmp/npm-test.log
+            tail -n 25 /tmp/npm-test.log
+            exit "$status"
+          fi
 
       - name: Publish workspace summary
         run: |
