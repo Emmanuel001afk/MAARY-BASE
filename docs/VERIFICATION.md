@@ -14,8 +14,9 @@ development environment. It is deliberately explicit about that difference.
 
 ## Automated suites actually run
 
-Command: `npm test` → **21 tests, 21 pass, 0 fail** (≈35 s). Every test below was executed in this
-environment and its output inspected.
+Command: `npm test` → **25 tests, 25 pass, 0 fail** (≈38 s). Every test below was executed in this
+environment and its output inspected, both with no APK present and with a valid APK artifact in place
+(the state CI runs in).
 
 | # | Test | Result |
 | :-- | :--- | :--- |
@@ -40,6 +41,26 @@ environment and its output inspected.
 | 19 | Adversarial: S3 adapter executes real SigV4 PUT/GET/DELETE against a local endpoint | pass |
 | 20 | Management Studio controls execute real workflows against the server (new) | pass |
 | 21 | Management Studio renders every section against the live API (jsdom) | pass |
+| 22 | APK inspection accepts a v2/v3 signing block whose footer ends at the central directory | pass |
+| 23 | APK inspection rejects a package with no signature evidence | pass |
+| 24 | APK inspection accepts v1 JAR signing evidence for older packages | pass |
+| 25 | APK inspection reports missing `classes.dex`, missing resources and a corrupt archive | pass |
+
+### CI (GitHub Actions) — executed on the runner
+
+`.github/workflows/ci.yml` was red when this branch started: the previous workflow never compiled the
+Android app (it only ran Node steps and packaged an APK in-process), so the first real Gradle job failed.
+It now passes end to end:
+
+- `Android Gradle build` — checkout, Temurin JDK 17, Gradle wrapper 8.7, `:app:testDebugUnitTest`,
+  `:app:assembleDebug`, then structural checks, `aapt2 dump badging` (package `com.marrybase.platform`,
+  `minSdkVersion:'24'`), `apksigner verify` (v2 scheme, 1 signer, debug certificate), `zipalign -c -v 4`,
+  and artifact upload. **This is a genuine Gradle build producing a real, signed APK (94,396 bytes).**
+- `Typecheck & integration tests` — `npm ci`, downloads that APK, `npm run typecheck`, `check:studio`,
+  `check:mobile`, `npm run build`, `npm run verify:apk` (apksigner on the downloaded artifact), and
+  `npm test` → 25/25.
+
+Exit status of the final run: **success** (workflow run `40119983334`).
 
 Also run and inspected:
 
@@ -101,7 +122,7 @@ Additional manual checks (executed):
 
 | Area | Status | Required verification |
 | :--- | :--- | :--- |
-| Android Gradle build and packaging | **Not executed** — no JDK/Android SDK; SDK hosts unreachable | Run `cd android && ./gradlew :app:testDebugUnitTest :app:assembleDebug`, or the CI `android` job, which also runs `apksigner`, `aapt2 dump badging` and `zipalign`. |
+| Android Gradle build and packaging | **Verified in CI** — no JDK/Android SDK in the local sandbox, but the `android` job builds a real signed APK on every push (see above) | Local reproduction only: `cd android && ./gradlew :app:testDebugUnitTest :app:assembleDebug` on a JDK 17 + SDK host |
 | APK install and on-device behaviour | **Not executed** — no emulator/device | `adb install -r releases/marry-base.apk`, then follow the checklist in `docs/ANDROID.md`. |
 | Docker Compose deployment (PostgreSQL 17) | **Not executed** — no Docker daemon in this sandbox; `docker-compose.yml` is YAML-validated only | `docker compose up -d --build`, wait for healthy, then `/ready`, register with the bootstrap token, and `npm test` with `DATABASE_URL=postgres://…`. |
 | S3-compatible adapter against a real service | Partially verified — SigV4 requests are asserted against a local HTTP endpoint | Configure real credentials/bucket and upload/download/sign. |

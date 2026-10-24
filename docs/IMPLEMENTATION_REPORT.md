@@ -28,7 +28,7 @@ The six status words used throughout are defined once, in [Status vocabulary](#s
 | Backups & recovery (create/verify/**restore**) | operational & verified | test 4, 20 (restore-after-delete) |
 | Management studio (16 sections) | operational & verified (jsdom; no real browser) | tests 20, 21 |
 | Self-hosting (env, migrations, restart persistence, Compose file) | operational & verified locally; **Compose not executed** | manual restart test; YAML validated only |
-| Android companion | built source + Gradle pipeline **implemented not fully verified** | Java/XML parsed, CI job defined; aapt/apksigner/packaging **not run** |
+| Android companion | build & packaging **operational & verified in CI**; on-device use **not verified** | CI job builds a real signed APK, `apksigner`/`aapt2`/`zipalign` pass, artifact uploaded and consumed by the test job |
 
 Clean start, empty database → the platform reports honestly instead of claiming full operation:
 
@@ -245,6 +245,12 @@ and carries a signing block. Only then is it copied to `releases/` with a checks
 `npm run verify:apk` adds `apksigner` verification. CI's `android` job runs the build, `apksigner`,
 `aapt2 dump badging`, `zipalign` and uploads the artifact; the `verify` job consumes it.
 
+**In CI the pipeline runs and passes** (workflow run `40119983334`): `./gradlew :app:testDebugUnitTest`
+then `:app:assembleDebug`, structural checks, `aapt2 dump badging` (`com.marrybase.platform`,
+`minSdkVersion:'24'`), `apksigner verify` (v2 scheme, one signer), `zipalign -c -v 4`, artifact upload,
+and the verification job downloads and re-verifies that same APK with `npm run verify:apk`.
+The artifact is a real Gradle output (94,396 bytes), not an assembled ZIP.
+
 **On this host the build cannot run** (no JDK/Android SDK; SDK hosts unreachable), and the CLI now says so
 with an actionable JSON payload instead of a one-liner:
 
@@ -263,13 +269,16 @@ install.
 
 ## 6. Executed verification
 
-### 6.1 Automated — `npm test` → **21 tests, 21 pass, 0 fail** (≈38 s)
+### 6.1 Automated — `npm test` → **25 tests, 25 pass, 0 fail** (≈38 s)
 
-Executed and output inspected after the final code change. Suite files (9):
+Executed and output inspected after the final code change. Suite files (10):
 `src/app.test.ts`, `src/data-api-auth-rls.test.ts`, `src/platform-auth-security.test.ts`,
 `src/projects-database.test.ts`, `src/storage-realtime-functions-ops.test.ts`,
-`src/operations-status.test.ts`, `src/adversarial-verification.test.ts`, `src/studio.test.ts`,
-`src/studio-workflows.test.ts`.
+`src/operations-status.test.ts`, `src/adversarial-verification.test.ts`, `src/apk-inspection.test.ts`,
+`src/studio.test.ts`, `src/studio-workflows.test.ts`.
+
+The suite is run twice: once with no APK present, and once with a valid artifact in place — the state
+CI runs in. Both runs pass 25/25.
 
 | # | Test | Result |
 | :-- | :--- | :--- |
@@ -294,6 +303,10 @@ Executed and output inspected after the final code change. Suite files (9):
 | 19 | Functions, sandbox, queues, retries, backups, SDK, CLI, live WebSocket realtime | pass |
 | 20 | **Studio controls execute real workflows** (jsdom + live server) | pass |
 | 21 | **Studio renders all 16 sections** against the live API (jsdom) | pass |
+| 22 | APK inspection accepts a v2/v3 signing block ending at the central directory | pass |
+| 23 | APK inspection rejects a package with no signature evidence | pass |
+| 24 | APK inspection accepts v1 JAR signing evidence | pass |
+| 25 | APK inspection reports missing dex/resources and corrupt archives | pass |
 
 Test 20 is the integration proof for the studio: project creation, table creation, row insert, filter
 `title eq "Ship it"` with `Showing 1–1 of 1`, row edit `PATCH`, add column via alter-table, confirmed row
@@ -335,6 +348,17 @@ Also run: `npm run typecheck` (clean), `npm run check:studio`, `npm run check:mo
    (tables, RLS coverage, event counts, function/job evidence, backup/restore evidence, file presence).
 6. Tests that assumed a hard-coded APK build path or a fixed platform status were made
    environment-independent instead of being skipped.
+7. **APK inspector rejected every genuine Gradle APK.** It searched for the `APK Sig Block 42`
+   footer starting at `centralOffset - 20` and walked *backwards*, so it never examined
+   `[centralOffset - 16, centralOffset)` — the only position a v2/v3 footer can end at. Real,
+   `apksigner`-verified APKs were reported `invalid` and withheld. Found only after CI produced a real
+   artifact; fixed and covered by `src/apk-inspection.test.ts`.
+8. **The companion state leaked a non-vocabulary value.** `/v1/platform` reported
+   `services.androidCompanion` as `available`/`missing`/`invalid`; artifact states are now mapped to
+   `operational`/`missing`/`failed` with the raw state kept in `android.state`.
+9. **APK test suites raced on the release artifact.** Four suites inspected or corrupted the single
+   `releases/marry-base.apk`, which is harmless when the file is absent but destroyed the CI artifact
+   mid-run. Each suite now copies it into its own temporary directory.
 
 ---
 
@@ -344,7 +368,7 @@ Nothing in this section was claimed as working.
 
 | # | Item | Status | Why | Exact remaining verification |
 | :-- | :--- | :--- | :--- | :--- |
-| 1 | Android Gradle build & APK packaging | **implemented not fully verified** | No JDK/Android SDK in this sandbox; `services.gradle.org`, `dl.google.com` and GitHub release assets are unreachable | On a machine with JDK 17 + SDK: `cd android && ./gradlew :app:testDebugUnitTest :app:assembleDebug`, or run the CI `android` job (it also runs `apksigner`, `aapt2 dump badging`, `zipalign`) |
+| 1 | Android Gradle build & APK packaging | **verified in CI** (run `40119983334`) | No JDK/SDK in this sandbox, but the `android` job compiles, signs, verifies and uploads the APK on every push | Reproduce locally with JDK 17 + SDK: `cd android && ./gradlew :app:testDebugUnitTest :app:assembleDebug` |
 | 2 | APK install & on-device behaviour | **not verified** | No emulator or device | `adb install -r releases/marry-base.apk`, then `docs/ANDROID.md` checklist (bad URL, wrong scheme, unreachable host, bad password, session expiry, rotation) |
 | 3 | Docker Compose deployment + PostgreSQL 17 | **partially verified** (YAML only) | No Docker binary | On a Docker host: `cp .env.example .env` (set secrets), `docker compose up -d --build`, wait for healthy, `curl /ready`, register with the bootstrap token, then `DATABASE_URL=postgres://… npm test` |
 | 4 | S3 backend against a real service | **partially implemented** | No credentials/bucket; SigV4 asserted only against a local HTTP endpoint | Set `STORAGE_BACKEND=s3` + `S3_*`, upload/download/sign/delete, verify persistence after restart |
