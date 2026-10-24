@@ -127,6 +127,32 @@ if (!foundMainActivity) {
   );
 }
 
+const requiredStudioAssets = [
+  "assets/dashboard/index.html",
+  "assets/dashboard/styles.css",
+  "assets/dashboard/app.js",
+  "assets/dashboard/js/actions.js",
+  "assets/dashboard/js/core.js",
+  "assets/dashboard/js/pages.js",
+  "assets/dashboard/logo.svg",
+];
+for (const assetName of requiredStudioAssets) {
+  const content = extractEntry(assetName);
+  if (content.length < 100) {
+    fail(`Bundled MARI BASE Studio asset '${assetName}' is unexpectedly small`);
+  }
+}
+const bundledStudioHtml = extractEntry("assets/dashboard/index.html").toString("utf8");
+if (!bundledStudioHtml.includes("MARI BASE") || !bundledStudioHtml.includes('data-tab="database"')) {
+  fail("Bundled Management Studio is missing the MARI BASE identity or database navigation");
+}
+const bundledStudioPages = extractEntry("assets/dashboard/js/pages.js").toString("utf8");
+for (const feature of ["database", "organizations", "storage", "realtime", "backups"]) {
+  if (!bundledStudioPages.toLowerCase().includes(feature)) {
+    fail(`Bundled Management Studio pages do not contain expected '${feature}' section`);
+  }
+}
+
 function findApksigner() {
   const exe = process.platform === "win32" ? "apksigner.bat" : "apksigner";
   for (const dir of (process.env.PATH || "").split(delimiter)) {
@@ -175,6 +201,7 @@ console.log(
       entriesCount: entries.size,
       sha256,
       apksignerVerified: Boolean(apksigner),
+      bundledStudioAssetsVerified: requiredStudioAssets.length,
     },
     null,
     2

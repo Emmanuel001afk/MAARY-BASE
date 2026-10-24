@@ -537,6 +537,33 @@ public class MainActivity extends Activity {
 
         studioWebView.setWebViewClient(new WebViewClient() {
             @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                Uri requested = request != null ? request.getUrl() : null;
+                String path = requested != null ? requested.getPath() : null;
+                if (path != null && path.startsWith("/dashboard/")) {
+                    String assetPath = path.substring("/dashboard/".length());
+                    if ("logo.png".equals(assetPath) || "app-icon.png".equals(assetPath)) {
+                        assetPath = "logo.svg";
+                    }
+                    String mimeType = "application/octet-stream";
+                    if (assetPath.endsWith(".css")) mimeType = "text/css";
+                    else if (assetPath.endsWith(".js")) mimeType = "application/javascript";
+                    else if (assetPath.endsWith(".svg")) mimeType = "image/svg+xml";
+                    else if (assetPath.endsWith(".png")) mimeType = "image/png";
+                    try {
+                        return new WebResourceResponse(
+                                mimeType,
+                                "UTF-8",
+                                getAssets().open("dashboard/" + assetPath)
+                        );
+                    } catch (Exception ignored) {
+                        // Fall through to the verified server for assets not bundled in this APK.
+                    }
+                }
+                return super.shouldInterceptRequest(view, request);
+            }
+
+            @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri targetUri = request.getUrl();
                 if (targetUri == null) {
@@ -754,16 +781,35 @@ public class MainActivity extends Activity {
         return sb.toString();
     }
 
+    private String readBundledDashboardHtml() {
+        StringBuilder html = new StringBuilder();
+        try (InputStream input = getAssets().open("dashboard/index.html");
+             BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                html.append(line).append('\n');
+            }
+            return html.toString();
+        } catch (Exception ex) {
+            return "<!doctype html><html lang=\"en\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>MARI BASE</title><body style=\"font:16px system-ui;background:#090e13;color:#edf5f2;padding:24px\"><h1>MARI BASE Studio</h1><p>The bundled Studio could not be opened. Please reconnect to your server and retry.</p></body></html>";
+        }
+    }
+
     private void openStudio(String origin) {
         barOriginLabel.setText(origin);
         recoveryBanner.setVisibility(View.GONE);
         setupScreen.setVisibility(View.GONE);
         studioScreen.setVisibility(View.VISIBLE);
 
-        String targetUrl = origin + "/dashboard";
         String current = studioWebView.getUrl();
         if (current == null || !current.startsWith(origin)) {
-            studioWebView.loadUrl(targetUrl);
+            studioWebView.loadDataWithBaseURL(
+                    origin + "/",
+                    readBundledDashboardHtml(),
+                    "text/html",
+                    "UTF-8",
+                    null
+            );
         }
     }
 
