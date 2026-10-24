@@ -135,14 +135,14 @@ public class MainActivity extends Activity {
         card.setBackground(roundedRect("#111827", "#1F2937", 16));
 
         TextView badge = new TextView(this);
-        badge.setText("MARRY BASE ANDROID COMPANION");
+        badge.setText("MARI BASE ANDROID COMPANION");
         badge.setTextColor(Color.parseColor("#34D399"));
         badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         badge.setTypeface(Typeface.DEFAULT_BOLD);
         card.addView(badge);
 
         TextView title = new TextView(this);
-        title.setText("Connect to Self-Hosted Backend");
+        title.setText("Your backend workspace");
         title.setTextColor(Color.parseColor("#F9FAFB"));
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 21);
         title.setTypeface(Typeface.DEFAULT_BOLD);
@@ -154,7 +154,7 @@ public class MainActivity extends Activity {
         card.addView(title, titleLp);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Verify PostgreSQL & storage readiness (/ready) before opening Management Studio inside an origin-locked WebView.");
+        subtitle.setText("Connect to your self-hosted MARI BASE instance. We verify database and storage readiness before opening Management Studio.");
         subtitle.setTextColor(Color.parseColor("#9CA3AF"));
         subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
@@ -165,7 +165,7 @@ public class MainActivity extends Activity {
         card.addView(subtitle, subLp);
 
         TextView inputLabel = new TextView(this);
-        inputLabel.setText("MARRY BASE Server URL");
+        inputLabel.setText("MARI BASE Server URL");
         inputLabel.setTextColor(Color.parseColor("#E5E7EB"));
         inputLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         inputLabel.setTypeface(Typeface.DEFAULT_BOLD);
@@ -249,7 +249,7 @@ public class MainActivity extends Activity {
         statusBox.addView(statusTitle);
 
         statusDetail = new TextView(this);
-        statusDetail.setText("Enter your MARRY BASE server URL and run /ready verification.");
+        statusDetail.setText("Enter your MARI BASE server URL and run /ready verification.");
         statusDetail.setTextColor(Color.parseColor("#9CA3AF"));
         statusDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         LinearLayout.LayoutParams detailLp = new LinearLayout.LayoutParams(
@@ -262,7 +262,7 @@ public class MainActivity extends Activity {
 
         connectOpenButton = new Button(this);
         connectOpenButton.setAllCaps(false);
-        connectOpenButton.setText("Verify /ready & Open Studio");
+        connectOpenButton.setText("Verify & Open Studio");
         connectOpenButton.setTextColor(Color.parseColor("#04130D"));
         connectOpenButton.setTypeface(Typeface.DEFAULT_BOLD);
         connectOpenButton.setBackground(roundedRect("#10B981", "#059669", 10));
@@ -286,7 +286,7 @@ public class MainActivity extends Activity {
 
         verifyOnlyButton = new Button(this);
         verifyOnlyButton.setAllCaps(false);
-        verifyOnlyButton.setText("Test /ready Only");
+        verifyOnlyButton.setText("Test Connection");
         verifyOnlyButton.setTextColor(Color.parseColor("#E5E7EB"));
         verifyOnlyButton.setBackground(roundedRect("#1F2937", "#374151", 10));
         verifyOnlyButton.setOnClickListener(v ->
@@ -308,7 +308,7 @@ public class MainActivity extends Activity {
             prefs.edit().remove(KEY_SAVED_URL).remove(KEY_ALLOW_HTTP).apply();
             verifiedOrigin = null;
             urlInput.setText("");
-            setStatusMessage("Saved configuration cleared", "Enter a MARRY BASE URL to connect.", "#9CA3AF");
+            setStatusMessage("Saved configuration cleared", "Enter a MARI BASE URL to connect.", "#9CA3AF");
         });
         LinearLayout.LayoutParams halfLp2 = new LinearLayout.LayoutParams(
                 0,
@@ -535,7 +535,7 @@ public class MainActivity extends Activity {
                 }
 
                 JSONObject platformJson = fetchJson(normalizedOrigin + "/v1/platform");
-                String platformName = platformJson.optString("name", "MARRY BASE");
+                String platformName = platformJson.optString("name", "MARI BASE");
                 String version = platformJson.optString("version", "1.0.0");
                 JSONObject dbObj = platformJson.optJSONObject("database");
                 String dbMode = dbObj != null ? dbObj.optString("mode", "PostgreSQL") : "PostgreSQL";
@@ -564,7 +564,7 @@ public class MainActivity extends Activity {
                     verifyOnlyButton.setEnabled(true);
                     setStatusMessage(
                             "Verification failed",
-                            ex.getMessage() != null ? ex.getMessage() : "Unable to reach MARRY BASE server.",
+                            ex.getMessage() != null ? ex.getMessage() : "Unable to reach MARI BASE server.",
                             "#F87171"
                     );
                     if (studioScreen.getVisibility() == View.VISIBLE) {
@@ -577,7 +577,7 @@ public class MainActivity extends Activity {
 
     private String validateAndNormalizeOrigin(String rawInput, boolean allowCleartextHttp) {
         if (rawInput == null || rawInput.trim().isEmpty()) {
-            throw new IllegalArgumentException("Please enter your MARRY BASE server URL.");
+            throw new IllegalArgumentException("Please enter your MARI BASE server URL.");
         }
         String candidate = rawInput.trim();
         URI parsed;
@@ -629,7 +629,7 @@ public class MainActivity extends Activity {
             conn.setReadTimeout(READ_TIMEOUT_MS);
             conn.setInstanceFollowRedirects(false);
             conn.setRequestProperty("Accept", "application/json");
-            conn.setRequestProperty("User-Agent", "MARRY-BASE-Android/1.0");
+            conn.setRequestProperty("User-Agent", "MARI-BASE-Android/1.0");
 
             int code = conn.getResponseCode();
             InputStream stream = code >= 200 && code < 400 ? conn.getInputStream() : conn.getErrorStream();
