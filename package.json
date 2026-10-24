@@ -1,9 +1,17 @@
 {
   "name": "marry-base",
-  "version": "1.1.0",
+  "version": "1.0.0",
   "private": true,
-  "description": "MARRY BASE — Independent self-hostable backend, database, and mobile APK platform",
+  "description": "MARRY BASE — Self-hostable PostgreSQL backend development platform with Management Studio and Android companion",
   "type": "module",
+  "bin": {
+    "marry-base": "./dist/cli/index.js"
+  },
+  "exports": {
+    ".": "./dist/app.js",
+    "./sdk": "./dist/sdk/index.js",
+    "./cli": "./dist/cli/index.js"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -12,15 +20,13 @@
     "check:studio": "node --check public/dashboard/app.js && node --check public/dashboard/js/core.js && node --check public/dashboard/js/pages.js && node --check public/dashboard/js/actions.js",
     "check:mobile": "node --check public/mobile/app.js && node --check public/mobile/config.js",
     "build": "npm run check:studio && npm run check:mobile && tsc -p tsconfig.json",
-    "build:apk": "npm run android:build",
+    "build:android": "tsx src/cli/index.ts apk build",
     "verify:apk": "node scripts/verify-apk.mjs",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/**/*.test.ts",
     "db:migrate": "tsx src/db/migrate.ts",
-    "cli": "tsx src/cli/index.ts",
-    "android:build": "tsx src/cli/index.ts apk build",
-    "android:status": "tsx src/cli/index.ts apk status"
+    "cli": "tsx src/cli/index.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.3.15",
@@ -36,11 +42,9 @@
     "zod": "^4.0.5"
   },
   "devDependencies": {
-    "@types/jsdom": "^21.1.7",
     "@types/node": "^22.16.5",
     "@types/pg": "^8.15.5",
     "@types/ws": "^8.18.1",
-    "jsdom": "^25.0.1",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3"
   }

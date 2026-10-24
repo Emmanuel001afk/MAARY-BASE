@@ -10,6 +10,7 @@ import {
   deleteProjectRlsPolicy,
   dropProjectTable,
   executeProjectSql,
+  getProjectDatabaseDiagnostics,
   getTableSchema,
   inspectProjectSchema,
   listProjectMigrations,
@@ -21,6 +22,18 @@ import { realtimeBroker } from "../services/realtime.service.js";
 export async function registerDatabaseRoutes(
   app: FastifyInstance
 ): Promise<void> {
+  // Database Diagnostics, Roles & Isolation Health
+  app.get(
+    "/v1/projects/:projectRef/database/diagnostics",
+    async (request) => {
+      const { projectRef } = request.params as { projectRef: string };
+      const { project } = await requireProjectControlAccess(
+        request,
+        projectRef
+      );
+      return getProjectDatabaseDiagnostics(project);
+    }
+  );
   // List all tables & schema details in project
   app.get("/v1/projects/:projectRef/database/tables", async (request) => {
     const { projectRef } = request.params as { projectRef: string };

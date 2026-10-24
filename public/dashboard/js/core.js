@@ -1,406 +1,196 @@
-const storage = {
+export const $ = (id) => document.getElementById(id);
+
+export const storageAdapter = {
   get(key) {
     try { return window.localStorage.getItem(key); } catch { return null; }
   },
   set(key, value) {
-    try { window.localStorage.setItem(key, value); } catch { /* Storage can be unavailable in hardened browsers. */ }
+    try { window.localStorage.setItem(key, value); } catch {}
   },
   remove(key) {
-    try { window.localStorage.removeItem(key); } catch { /* No-op. */ }
+    try { window.localStorage.removeItem(key); } catch {}
   },
 };
 
+export const PROJECT_FREE_TABS = new Set(["organizations", "platform", "docs"]);
+
 export const state = {
-  token: storage.get("maary_platform_token"),
-  refreshToken: storage.get("maary_platform_refresh_token"),
   user: null,
+  organizations: [],
+  activeOrgSlug: storageAdapter.get("maary_active_org") || "",
+  selectedOrgDetail: null,
   projects: [],
   activeProject: null,
-  projectDetails: null,
-  memberRole: null,
   activeTab: "overview",
   activeTable: null,
-  rowOffset: 0,
-  rowEdit: null,
   activeBucket: null,
   tables: [],
   buckets: [],
   functions: [],
-  authConfig: null,
   revealSecrets: false,
+  platformInfo: null,
+  readyInfo: null,
   ws: null,
   wsStatus: "disconnected",
   requestVersion: 0,
+  confirmResolver: null,
+  confirmRequireText: null,
   slugTouched: false,
+  orgSlugTouched: false,
+  commandIndex: 0,
+  commandItems: [],
+  rowBrowser: {
+    limit: 25,
+    offset: 0,
+    filter: "",
+    orderBy: "",
+    orderDir: "desc",
+    rows: [],
+  },
+  visualColumns: [
+    { name: "id", type: "uuid", primaryKey: true, nullable: false, defaultValue: "gen_random_uuid()" },
+    { name: "title", type: "text", primaryKey: false, nullable: false, defaultValue: "" },
+    { name: "created_at", type: "timestamptz", primaryKey: false, nullable: false, defaultValue: "now()" },
+  ],
 };
 
-export const $ = (id) => document.getElementById(id);
-export const storageAdapter = storage;
-
-export class ApiError extends Error {
-  constructor(message, status = 0, code = "request_failed", details = null, requestId = null) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.code = code;
-    this.details = details;
-    this.requestId = requestId;
-  }
-}
-
-let refreshPromise = null;
-
-export function setSession(result) {
-  state.token = result.accessToken;
-  state.refreshToken = result.refreshToken;
-  state.user = result.user ?? state.user;
-  if (state.token) storage.set("maary_platform_token", state.token);
-  if (state.refreshToken) storage.set("maary_platform_refresh_token", state.refreshToken);
-}
-
-export function clearSession() {
-  state.token = null;
-  state.refreshToken = null;
-  state.user = null;
-  state.projects = [];
-  state.activeProject = null;
-  state.projectDetails = null;
-  state.tables = [];
-  state.buckets = [];
-  storage.remove("maary_platform_token");
-  storage.remove("maary_platform_refresh_token");
-  storage.remove("maary_active_project");
-}
-
-async function refreshSession() {
-  if (!state.refreshToken) throw new ApiError("Your session has expired. Please sign in again.", 401, "unauthorized");
-  if (!refreshPromise) {
-    refreshPromise = (async () => {
-      const response = await fetch("/v1/platform/auth/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ refreshToken: state.refreshToken }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new ApiError(data.message || "Your session could not be renewed.", response.status, data.error || "unauthorized");
-      }
-      setSession(data);
-      return data;
-    })().finally(() => { refreshPromise = null; });
-  }
-  return refreshPromise;
-}
-
-function isJsonBody(body) {
-  if (!body || typeof body !== "object") return false;
-  if (body instanceof FormData || body instanceof Blob || body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return false;
-  return Array.isArray(body) || Object.getPrototypeOf(body) === Object.prototype;
-}
-
-export async function api(path, options = {}) {
-  const {
-    timeout = 30_000,
-    skipRefresh = false,
-    responseType = "auto",
-    _retry = false,
-    ...originalOptions
-  } = options;
-  const headers = { Accept: "application/json", ...(originalOptions.headers || {}) };
-  if (state.token && !headers.Authorization) headers.Authorization = `Bearer ${state.token}`;
-
-  const request = { ...originalOptions, headers };
-  if (isJsonBody(request.body)) {
-    headers["Content-Type"] = "application/json";
-    request.body = JSON.stringify(request.body);
-  }
-
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeout);
-  request.signal = controller.signal;
-
-  let response;
-  try {
-    response = await fetch(path, request);
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new ApiError("The request took too long. Check your connection and try again.", 0, "timeout");
-    }
-    throw new ApiError(navigator.onLine ? "Unable to reach the MARRY BASE server." : "You appear to be offline.", 0, "network_error");
-  } finally {
-    window.clearTimeout(timer);
-  }
-
-  const isAuthEntrypoint = /\/v1\/platform\/auth\/(login|register|refresh)(?:$|\?)/.test(path);
-  if (response.status === 401 && !skipRefresh && !_retry && state.refreshToken && !isAuthEntrypoint) {
-    try {
-      await refreshSession();
-      return api(path, { ...options, _retry: true });
-    } catch (error) {
-      if (error?.status === 401 || error?.status === 403) {
-        window.dispatchEvent(new CustomEvent("maary:unauthorized"));
-      }
-      throw error;
-    }
-  }
-
-  let data;
-  if (response.status === 204) {
-    data = null;
-  } else if (responseType === "blob") {
-    data = await response.blob();
-  } else if (responseType === "text") {
-    data = await response.text();
-  } else {
-    const contentType = response.headers.get("content-type") || "";
-    if (contentType.includes("application/json") || contentType.includes("+json")) {
-      data = await response.json().catch(() => ({}));
-    } else {
-      data = await response.text();
-    }
-  }
-
-  if (!response.ok) {
-    if (response.status === 401 && !isAuthEntrypoint) {
-      window.dispatchEvent(new CustomEvent("maary:unauthorized"));
-    }
-    const message = data && typeof data === "object" ? data.message : null;
-    const suffix = data?.requestId ? ` (Request ${data.requestId})` : "";
-    throw new ApiError(
-      `${message || `Request failed with status ${response.status}`}${suffix}`,
-      response.status,
-      data?.error || "request_failed",
-      data?.details,
-      data?.requestId,
-    );
-  }
-  return data;
-}
-
-export function projectApi(suffix = "") {
-  if (!state.activeProject?.slug) throw new ApiError("Select a project first.", 400, "no_project");
-  return `/v1/projects/${encodeURIComponent(state.activeProject.slug)}${suffix}`;
-}
-
 export function esc(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[character]);
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
+  }[char]));
 }
 
-export function icon(name, className = "") {
-  return `<svg class="icon ${esc(className)}" aria-hidden="true"><use href="#i-${esc(name)}"></use></svg>`;
+export function icon(name) {
+  return `<svg class="icon" aria-hidden="true"><use href="#i-${esc(name)}"></use></svg>`;
+}
+
+export function slugify(value) {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
 }
 
 export function formatNumber(value) {
-  return new Intl.NumberFormat().format(Number(value) || 0);
+  const num = Number(value ?? 0);
+  return Number.isFinite(num) ? new Intl.NumberFormat().format(num) : "0";
 }
 
-export function formatBytes(value, precision = 1) {
-  const bytes = Number(value) || 0;
-  if (bytes === 0) return "0 B";
+export function formatBytes(bytes) {
+  const value = Number(bytes ?? 0);
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
-  const index = Math.min(Math.floor(Math.log(Math.abs(bytes)) / Math.log(1024)), units.length - 1);
-  const amount = bytes / (1024 ** index);
-  return `${amount.toFixed(index === 0 ? 0 : precision)} ${units[index]}`;
+  const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
+  const scaled = value / 1024 ** index;
+  return `${scaled.toFixed(index === 0 || scaled >= 10 ? 0 : 1)} ${units[index]}`;
 }
 
-export function formatDate(value, includeTime = true) {
-  if (!value) return "Never";
+export function formatDate(value, withTime = true) {
+  if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return new Intl.DateTimeFormat(undefined, includeTime
-    ? { dateStyle: "medium", timeStyle: "short" }
-    : { dateStyle: "medium" }).format(date);
+  return new Intl.DateTimeFormat(undefined, withTime ? {
+    dateStyle: "medium", timeStyle: "short",
+  } : { dateStyle: "medium" }).format(date);
 }
 
 export function timeAgo(value) {
   if (!value) return "Never";
-  const timestamp = new Date(value).getTime();
-  if (Number.isNaN(timestamp)) return String(value);
-  const seconds = Math.round((timestamp - Date.now()) / 1000);
-  const absolute = Math.abs(seconds);
-  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  if (absolute < 60) return formatter.format(seconds, "second");
-  if (absolute < 3600) return formatter.format(Math.round(seconds / 60), "minute");
-  if (absolute < 86400) return formatter.format(Math.round(seconds / 3600), "hour");
-  if (absolute < 2_592_000) return formatter.format(Math.round(seconds / 86400), "day");
+  const seconds = Math.round((Date.now() - new Date(value).getTime()) / 1000);
+  if (!Number.isFinite(seconds)) return "—";
+  if (seconds < 10) return "Just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 30) return `${days}d ago`;
   return formatDate(value, false);
 }
 
-export function truncate(value, length = 42) {
+export function truncate(value, length = 36) {
   const text = String(value ?? "");
-  return text.length > length ? `${text.slice(0, length)}…` : text;
+  return text.length > length ? `${text.slice(0, length - 1)}…` : text;
 }
 
-export function slugify(value) {
-  return String(value || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+export function badge(label, tone = null, text = label) {
+  const normalized = String(tone || label || "").toLowerCase();
+  const map = {
+    active: "success", applied: "success", completed: "success", ready: "success",
+    enabled: "success", verified: "success", public: "warning", warning: "warning",
+    queued: "warning", pending: "warning", suspended: "warning", paused: "warning",
+    failed: "danger", revoked: "danger", error: "danger", danger: "danger",
+    cancelled: "neutral", disabled: "neutral", rolled_back: "neutral", private: "info",
+    authenticated: "info", info: "info", owner: "purple", admin: "purple",
+    superadmin: "purple", service_role: "danger", gold: "gold", success: "success",
+  };
+  const resolved = map[normalized] || "neutral";
+  const dot = ["success", "warning", "danger"].includes(resolved) ? '<span class="badge-dot"></span>' : "";
+  return `<span class="badge badge-${resolved}">${dot}${esc(text)}</span>`;
 }
 
-export function initials(user) {
-  const source = user?.name || user?.email || "MB";
-  const parts = String(source).split(/[\s@._-]+/).filter(Boolean);
-  return parts.slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "MB";
+export function moduleStatusBadge(statusState) {
+  const map = {
+    operational_verified: ["success", "Operational & verified"],
+    implemented_unverified: ["info", "Implemented · unverified"],
+    partially_implemented: ["warning", "Partially implemented"],
+    requires_configuration: ["warning", "Requires configuration"],
+    unavailable: ["neutral", "Unavailable"],
+    failed: ["danger", "Failed"],
+  };
+  const [tone, label] = map[statusState] || ["neutral", String(statusState || "unknown")];
+  return badge(tone, tone, label);
 }
 
-export function statusTone(status) {
-  const value = String(status || "").toLowerCase();
-  if (["active", "completed", "applied", "ready", "connected", "enabled", "operational", "success", "verified"].includes(value)) return "success";
-  if (["failed", "dead_letter", "revoked", "banned", "suspended", "error", "degraded", "disabled"].includes(value)) return "danger";
-  if (["queued", "pending", "running", "restored", "non-prod", "archived", "cancelled", "rolled_back"].includes(value)) return "warning";
-  if (["production", "service_role", "owner"].includes(value)) return "purple";
-  return "info";
-}
-
-export function badge(value, tone = statusTone(value), label = null) {
-  return `<span class="badge badge-${esc(tone)}">${esc(label ?? String(value ?? "unknown").replaceAll("_", " "))}</span>`;
-}
-
-export function emptyState(iconName, title, message, action = "") {
-  return `<div class="empty-state"><div class="empty-icon">${icon(iconName)}</div><h3>${esc(title)}</h3><p>${esc(message)}</p>${action}</div>`;
-}
-
-export function loadingState(label = "Loading data…") {
-  return `<div class="loading-block"><span class="button-group"><span class="spinner"></span>${esc(label)}</span></div>`;
-}
-
-export function errorState(error, retryAction = "refresh-page") {
-  const message = error instanceof Error ? error.message : String(error || "Something went wrong.");
-  return `<div class="error-state">${icon("alert")}<h3>We couldn’t load this view</h3><p>${esc(message)}</p><button class="btn btn-secondary btn-sm" data-action="${esc(retryAction)}">${icon("refresh")}Try again</button></div>`;
+export function quotaMeter(label, used, limit, formatter = formatNumber) {
+  const safeUsed = Math.max(0, Number(used || 0));
+  const safeLimit = Math.max(1, Number(limit || 1));
+  const pct = Math.min(100, Math.round((safeUsed / safeLimit) * 100));
+  const tone = pct >= 90 ? "danger" : pct >= 75 ? "warn" : "";
+  return `<div class="quota-meter"><div class="quota-meter-head"><strong>${esc(label)}</strong><span class="mono">${esc(formatter(safeUsed))} / ${esc(formatter(safeLimit))} (${pct}%)</span></div><div class="quota-track"><div class="quota-fill ${tone}" style="width:${pct}%"></div></div></div>`;
 }
 
 export function showToast(message, type = "success", title = null) {
   const region = $("toast-region");
   if (!region) return;
+  const titles = { success: "Completed", error: "Action failed", warning: "Attention", info: "Updated" };
+  const icons = { success: "check", error: "alert", warning: "alert", info: "sparkles" };
   const toast = document.createElement("div");
   toast.className = `toast ${type}`;
-  toast.setAttribute("role", type === "error" ? "alert" : "status");
-  const iconName = type === "error" ? "alert" : type === "warning" ? "alert" : type === "info" ? "info" : "check";
-  toast.innerHTML = `${icon(iconName)}<div class="toast-content"><strong></strong><p></p></div><button class="icon-btn" aria-label="Dismiss notification">${icon("close")}</button>`;
-  toast.querySelector("strong").textContent = title || (type === "error" ? "Something went wrong" : type === "info" ? "Heads up" : "Done");
-  toast.querySelector("p").textContent = String(message || "Action completed.");
+  toast.innerHTML = `${icon(icons[type] || "check")}<div class="toast-content"><strong>${esc(title || titles[type] || "Notice")}</strong><p>${esc(message)}</p></div><button class="icon-btn" type="button" aria-label="Dismiss notification">${icon("close")}</button>`;
   const remove = () => {
-    if (!toast.isConnected) return;
     toast.classList.add("removing");
-    window.setTimeout(() => toast.remove(), 180);
+    window.setTimeout(() => toast.remove(), 190);
   };
-  toast.querySelector("button").addEventListener("click", remove);
+  toast.querySelector("button")?.addEventListener("click", remove);
   region.appendChild(toast);
-  while (region.children.length > 4) region.firstElementChild?.remove();
-  window.setTimeout(remove, type === "error" ? 8000 : 4500);
+  window.setTimeout(remove, type === "error" ? 6800 : 4200);
 }
 
-export function reportError(error, fallback = "The action could not be completed.") {
+export function reportError(error) {
   console.error(error);
-  showToast(error instanceof Error ? error.message : fallback, "error");
+  showToast(error?.message || "Something went wrong.", "error");
 }
 
-export async function busy(button, task, busyLabel = null) {
-  if (!button || button.disabled) return;
-  const original = button.innerHTML;
-  const width = button.offsetWidth;
-  if (width) button.style.minWidth = `${width}px`;
-  button.disabled = true;
-  button.setAttribute("aria-busy", "true");
-  button.innerHTML = `<span class="spinner"></span>${busyLabel ? `<span>${esc(busyLabel)}</span>` : original}`;
+export async function copyText(text, label = "Copied to clipboard") {
+  const value = String(text ?? "");
   try {
-    return await task();
-  } finally {
-    button.disabled = false;
-    button.removeAttribute("aria-busy");
-    button.innerHTML = original;
-    button.style.minWidth = "";
-  }
-}
-
-export function confirmAction({ title, message, confirmLabel = "Confirm", requireText = "", danger = true }) {
-  const dialog = $("confirm-dialog");
-  const form = dialog.querySelector("form");
-  const inputWrap = $("confirm-input-wrap");
-  const input = $("confirm-input");
-  const submit = $("confirm-submit");
-  $("confirm-title").textContent = title;
-  $("confirm-message").textContent = message;
-  $("confirm-icon").classList.toggle("danger", danger);
-  submit.textContent = confirmLabel;
-  submit.className = `btn ${danger ? "btn-danger" : "btn-primary"}`;
-  inputWrap.classList.toggle("hidden", !requireText);
-  input.value = "";
-  input.required = Boolean(requireText);
-  input.removeAttribute("pattern");
-  input.setCustomValidity("");
-  if (requireText) {
-    $("confirm-input-label").textContent = `Type “${requireText}” to confirm`;
-    input.oninput = () => input.setCustomValidity(input.value === requireText ? "" : `Enter ${requireText} exactly.`);
-  } else {
-    input.oninput = null;
-  }
-  form.onsubmit = (event) => {
-    if (event.submitter?.value === "confirm" && requireText && input.value !== requireText) {
-      event.preventDefault();
-      input.setCustomValidity(`Enter ${requireText} exactly.`);
-      input.reportValidity();
-    }
-  };
-  dialog.returnValue = "cancel";
-  dialog.showModal();
-  if (requireText) window.setTimeout(() => input.focus(), 50);
-  return new Promise((resolve) => {
-    dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true });
-  });
-}
-
-export function showCredentials(title, value) {
-  $("credential-title").textContent = title;
-  $("credential-value").textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  $("credential-dialog").showModal();
-}
-
-export async function copyText(value, quiet = false) {
-  const text = String(value ?? "");
-  try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      const copied = document.execCommand("copy");
-      textarea.remove();
-      if (!copied) throw new Error("Copy command was rejected.");
-    }
-    if (!quiet) showToast("Copied to clipboard.", "success", "Copied");
-    return true;
+    await navigator.clipboard.writeText(value);
+    showToast(label, "success", "Copied");
   } catch {
-    showToast("Copy wasn’t available. Select the value and copy it manually.", "warning");
-    return false;
+    const area = document.createElement("textarea");
+    area.value = value;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+    showToast(label, "success", "Copied");
   }
-}
-
-export function parseJson(value, label = "JSON") {
-  try {
-    return JSON.parse(value);
-  } catch (error) {
-    throw new ApiError(`${label} is invalid: ${error.message}`, 400, "invalid_json");
-  }
-}
-
-export function formatCell(value) {
-  if (value === null || value === undefined) return '<span class="subtle">NULL</span>';
-  if (typeof value === "object") return `<div class="json-cell">${esc(JSON.stringify(value))}</div>`;
-  if (typeof value === "boolean") return badge(String(value), value ? "success" : "info");
-  return esc(String(value));
-}
-
-export function debounce(callback, wait = 250) {
-  let timer;
-  return (...args) => {
-    window.clearTimeout(timer);
-    timer = window.setTimeout(() => callback(...args), wait);
-  };
 }
 
 export function downloadText(filename, content, mimeType = "application/json") {
@@ -415,12 +205,219 @@ export function downloadText(filename, content, mimeType = "application/json") {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function announce(message) {
-  const region = $("sr-announcer");
-  if (region) region.textContent = message;
+export function openDialog(id) {
+  const dialog = $(id);
+  if (!dialog) return;
+  if (typeof dialog.showModal === "function" && !dialog.open) dialog.showModal();
+  else dialog.setAttribute("open", "");
 }
 
 export function closeDialog(id) {
   const dialog = $(id);
-  if (dialog?.open) dialog.close();
+  if (!dialog) return;
+  if (typeof dialog.close === "function" && dialog.open) dialog.close();
+  else dialog.removeAttribute("open");
+}
+
+export function showCredentials(title, content, subtitle = "Raw secret keys are only displayed once when created or rotated.") {
+  $("credentials-title").textContent = title;
+  $("credentials-subtitle").textContent = subtitle;
+  $("credential-value").textContent = content;
+  openDialog("credentials-dialog");
+}
+
+export function confirmAction({ title, message, confirmLabel = "Continue", danger = true, requireText = null }) {
+  return new Promise((resolve) => {
+    state.confirmResolver = resolve;
+    state.confirmRequireText = requireText;
+    $("confirm-title").textContent = title;
+    $("confirm-message").textContent = message;
+    const submit = $("confirm-submit-btn");
+    submit.textContent = confirmLabel;
+    submit.className = danger ? "btn btn-danger" : "btn btn-primary";
+    $("confirm-icon").className = danger ? "dialog-icon danger" : "dialog-icon";
+    const wrap = $("confirm-input-wrap");
+    const input = $("confirm-input");
+    if (requireText) {
+      wrap.classList.remove("hidden");
+      $("confirm-input-label").textContent = `Type "${requireText}" to confirm`;
+      input.value = "";
+      input.placeholder = requireText;
+      submit.disabled = true;
+    } else {
+      wrap.classList.add("hidden");
+      input.value = "";
+      submit.disabled = false;
+    }
+    openDialog("confirm-dialog");
+    window.setTimeout(() => (requireText ? input : submit).focus(), 30);
+  });
+}
+
+export function settleConfirm(confirmed) {
+  const resolve = state.confirmResolver;
+  state.confirmResolver = null;
+  state.confirmRequireText = null;
+  closeDialog("confirm-dialog");
+  if (resolve) resolve(Boolean(confirmed));
+}
+
+export function parseJson(text, label = "JSON") {
+  try {
+    return JSON.parse(String(text || "").trim());
+  } catch (error) {
+    throw new Error(`${label} is not valid JSON: ${error.message}`);
+  }
+}
+
+export const sessionTokens = {
+  getAccess() {
+    try { return window.sessionStorage.getItem("maary_access_token"); } catch { return null; }
+  },
+  getRefresh() {
+    try { return window.sessionStorage.getItem("maary_refresh_token"); } catch { return null; }
+  },
+  save(accessToken, refreshToken) {
+    try {
+      if (accessToken) window.sessionStorage.setItem("maary_access_token", accessToken);
+      if (refreshToken) window.sessionStorage.setItem("maary_refresh_token", refreshToken);
+    } catch {}
+  },
+  clear() {
+    try {
+      window.sessionStorage.removeItem("maary_access_token");
+      window.sessionStorage.removeItem("maary_refresh_token");
+    } catch {}
+  },
+};
+
+let refreshPromise = null;
+
+async function tryRefreshSession() {
+  const refreshToken = sessionTokens.getRefresh();
+  if (!refreshToken) return false;
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    try {
+      const response = await fetch("/v1/platform/auth/refresh", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken }),
+      });
+      if (!response.ok) {
+        sessionTokens.clear();
+        return false;
+      }
+      const data = await response.json();
+      if (data.accessToken) {
+        sessionTokens.save(data.accessToken, data.refreshToken);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
+}
+
+export async function api(path, options = {}) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), options.timeout || 45_000);
+  const headers = { ...(options.headers || {}) };
+  if (!headers.Authorization && !headers.authorization && !options.skipPlatformAuth) {
+    const accessToken = sessionTokens.getAccess();
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  }
+  let body = options.body;
+  const isRawBody = body instanceof Blob || body instanceof FormData || body instanceof ArrayBuffer || ArrayBuffer.isView(body);
+  if (body !== undefined && !isRawBody && typeof body !== "string") {
+    if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
+    body = JSON.stringify(body);
+  }
+  try {
+    let response = await fetch(path, {
+      method: options.method || "GET",
+      credentials: "same-origin",
+      headers,
+      body,
+      signal: controller.signal,
+    });
+    if (
+      response.status === 401 &&
+      !options.retried &&
+      !options.skipPlatformAuth &&
+      !path.startsWith("/v1/platform/auth/login") &&
+      !path.startsWith("/v1/platform/auth/register") &&
+      !path.startsWith("/v1/platform/auth/refresh")
+    ) {
+      const refreshed = await tryRefreshSession();
+      if (refreshed) {
+        window.clearTimeout(timeout);
+        const retryHeaders = { ...(options.headers || {}) };
+        const nextAccess = sessionTokens.getAccess();
+        if (nextAccess) retryHeaders.Authorization = `Bearer ${nextAccess}`;
+        return api(path, { ...options, headers: retryHeaders, retried: true });
+      }
+    }
+    const contentType = response.headers.get("content-type") || "";
+    const payload = contentType.includes("application/json")
+      ? await response.json().catch(() => ({}))
+      : await response.text();
+    if (
+      response.status === 401 &&
+      !options.allowUnauthorized &&
+      !options.skipPlatformAuth &&
+      !path.startsWith("/v1/platform/auth/")
+    ) {
+      window.dispatchEvent(new CustomEvent("maary:unauthorized"));
+    }
+    if (!response.ok) {
+      const message = typeof payload === "object" && payload
+        ? payload.error?.message || payload.message || `Request failed (${response.status})`
+        : payload || `Request failed (${response.status})`;
+      const error = new Error(message);
+      error.status = response.status;
+      error.details = payload?.error?.details;
+      throw error;
+    }
+    return payload;
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("The request timed out. Check server load and try again.");
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+export function projectApi(suffix = "") {
+  if (!state.activeProject?.slug) throw new Error("Select or create a project first.");
+  return `/v1/projects/${encodeURIComponent(state.activeProject.slug)}${suffix}`;
+}
+
+export async function withButtonBusy(button, work, busyLabel = "Working…") {
+  if (!button) return work();
+  const previousHtml = button.innerHTML;
+  const wasDisabled = button.disabled;
+  button.disabled = true;
+  button.classList.add("is-busy");
+  button.innerHTML = `<span class="spinner" aria-hidden="true"></span><span>${esc(busyLabel)}</span>`;
+  try {
+    return await work();
+  } finally {
+    button.disabled = wasDisabled;
+    button.classList.remove("is-busy");
+    button.innerHTML = previousHtml;
+  }
+}
+
+export function debounce(fn, wait = 260) {
+  let timer = null;
+  return (...args) => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => fn(...args), wait);
+  };
 }

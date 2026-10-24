@@ -1,454 +1,553 @@
 import {
-  $, api, busy, clearSession, closeDialog, esc, icon, initials, reportError,
-  setSession, showToast, slugify, state, storageAdapter,
+  $, PROJECT_FREE_TABS, api, closeDialog, esc, icon, openDialog, reportError,
+  sessionTokens, settleConfirm, showToast, slugify, state, storageAdapter, withButtonBusy,
 } from "./js/core.js";
-import { PAGE_META, loadPage, renderPage, updateRealtimeUi } from "./js/pages.js";
+import { COMMAND_ITEMS, PAGE_META, loadPage, renderPageSkeleton } from "./js/pages.js";
 import {
-  activateLocalTab, handleAction, handleChange, handleInput, handleSubmit,
-  renderSqlHistory,
+  activateLocalTab, closeRealtime, handleAction, handleChange, handleInput, handleSubmit, renderSqlHistory,
 } from "./js/actions.js";
 
-let authMode = "login";
-let projectSequence = 0;
-let pendingLocalTab = null;
-let commandSelection = 0;
-let filteredCommands = [];
-
-const commands = [
-  ...Object.entries(PAGE_META).map(([id, page]) => ({ id: `page:${id}`, group: "Navigate", title: page.title, description: page.description, icon: page.icon, tab: id })),
-  { id: "new-project", group: "Actions", title: "Create a new project", description: "Provision an isolated backend", icon: "plus" },
-  { id: "refresh", group: "Actions", title: "Refresh current view", description: "Fetch the latest project data", icon: "refresh" },
-  { id: "theme", group: "Actions", title: "Toggle color theme", description: "Switch between dark and light mode", icon: "sun" },
-  { id: "apk", group: "Actions", title: "Android companion", description: "Open build status and download the Gradle-built APK", icon: "download" },
-  { id: "logout", group: "Account", title: "Sign out", description: "End this operator session", icon: "logout" },
-];
-
 function applyTheme(theme) {
-  const safeTheme = theme === "light" ? "light" : "dark";
-  document.documentElement.dataset.theme = safeTheme;
-  storageAdapter.set("maary_studio_theme", safeTheme);
-  $("theme-icon-use")?.setAttribute("href", safeTheme === "dark" ? "#i-sun" : "#i-moon");
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", safeTheme === "dark" ? "#0a0f14" : "#f3f6f5");
+  const next = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  storageAdapter.set("maary_theme", next);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", next === "light" ? "#f4f7f8" : "#071015");
+  const iconEl = $("theme-icon");
+  if (iconEl) iconEl.innerHTML = `<use href="#i-${next === "light" ? "moon" : "sun"}"></use>`;
 }
 
-function setAuthFeedback(message = "", type = "error") {
-  const feedback = $("auth-feedback");
-  feedback.textContent = message;
-  feedback.className = `inline-feedback${message ? "" : " hidden"}${type === "success" ? " success" : ""}`;
+function toggleTheme() {
+  applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+}
+
+function setSidebarOpen(open) {
+  $("sidebar")?.classList.toggle("open", open);
+  $("sidebar-backdrop")?.classList.toggle("hidden", !open);
+  $("mobile-menu-btn")?.setAttribute("aria-expanded", String(open));
 }
 
 function setAuthMode(mode) {
-  authMode = mode === "register" ? "register" : "login";
-  document.querySelectorAll("[data-auth-mode]").forEach((button) => {
-    const active = button.dataset.authMode === authMode;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-selected", String(active));
-  });
-  const registering = authMode === "register";
-  $("auth-title").textContent = registering ? "Create your operator account" : "Welcome back";
-  $("auth-subtitle").textContent = registering ? "Set up secure access to this MARRY BASE control plane." : "Sign in to your operator account to continue.";
-  $("auth-name-field").classList.toggle("hidden", !registering);
-  $("auth-bootstrap-field").classList.toggle("hidden", !registering);
-  $("auth-name").required = registering;
-  $("auth-password").autocomplete = registering ? "new-password" : "current-password";
-  $("password-hint").textContent = registering ? "At least 8 characters" : "Your operator password";
-  $("auth-submit").querySelector("span").textContent = registering ? "Create operator account" : "Sign in to Studio";
-  setAuthFeedback();
+  const isRegister = mode === "register";
+  $("auth-form").dataset.mode = isRegister ? "register" : "login";
+  $("auth-tab-login").classList.toggle("active", !isRegister);
+  $("auth-tab-login").setAttribute("aria-selected", String(!isRegister));
+  $("auth-tab-register").classList.toggle("active", isRegister);
+  $("auth-tab-register").setAttribute("aria-selected", String(isRegister));
+  $("auth-name-group").classList.toggle("hidden", !isRegister);
+  $("auth-title").textContent = isRegister ? "Create an operator account" : "Welcome back";
+  $("auth-subtitle").textContent = isRegister
+    ? "Create a Studio operator identity to provision workspaces, projects, and keys."
+    : "Sign in to manage workspaces, schemas, keys, and live deployments.";
+  $("auth-password").setAttribute("autocomplete", isRegister ? "new-password" : "current-password");
+  $("auth-submit-btn").textContent = isRegister ? "Create account" : "Sign in to Studio";
+  $("auth-error").classList.add("hidden");
+  const needBootstrapToken = $("auth-form").dataset.bootstrapTokenRequired === "true";
+  $("auth-bootstrap-token-group")?.classList.toggle("hidden", !(isRegister && needBootstrapToken));
 }
 
-function resetRealtime() {
-  if (state.ws) {
-    const socket = state.ws;
-    state.ws = null;
-    socket.onclose = null;
-    socket.close(1000, "Project changed");
+function showAuthError(message) {
+  const alert = $("auth-error");
+  alert.textContent = message;
+  alert.classList.remove("hidden");
+}
+
+async function refreshPlatformStatus() {
+  const [platformResult, readyResult, authStatusResult] = await Promise.allSettled([
+    api("/v1/platform", { allowUnauthorized: true, skipPlatformAuth: true }),
+    api("/ready", { allowUnauthorized: true, skipPlatformAuth: true }),
+    api("/v1/platform/auth/status", { allowUnauthorized: true, skipPlatformAuth: true }),
+  ]);
+
+  if (platformResult.status === "fulfilled") state.platformInfo = platformResult.value;
+  if (readyResult.status === "fulfilled") state.readyInfo = readyResult.value;
+
+  if (authStatusResult.status === "fulfilled") {
+    const authSt = authStatusResult.value;
+    $("auth-bootstrap-note")?.classList.toggle("hidden", !authSt.bootstrapAvailable);
+    $("auth-form").dataset.bootstrapTokenRequired = String(Boolean(authSt.bootstrapTokenRequired));
+    if (authSt.bootstrapAvailable) {
+      setAuthMode("register");
+    }
   }
-  updateRealtimeUi("disconnected");
+
+  const mode = state.platformInfo?.database?.mode || state.readyInfo?.checks?.database?.mode || "postgres";
+  const ready = readyResult.status === "fulfilled" && (readyResult.value?.status === "ready" || readyResult.value?.ready !== false);
+  const overall = state.platformInfo?.status || (ready ? "operational" : "degraded");
+
+  $("auth-runtime-label").textContent = ready
+    ? `Platform ready · PostgreSQL (${mode}) · ${overall}`
+    : "Runtime reachable · check database readiness";
+  const pill = $("platform-health-pill");
+  if (pill) {
+    pill.classList.toggle("healthy", ready);
+    pill.classList.toggle("degraded", !ready);
+    $("health-pill-text").textContent = ready ? `Ready · ${mode}` : "Degraded";
+  }
+  $("sidebar-runtime-mode").textContent = `PostgreSQL (${mode})`;
+  $("footer-runtime-summary").textContent = ready
+    ? `Runtime verified · PostgreSQL (${mode})`
+    : "Check /ready for diagnostics";
 }
 
-function showAuth(message = "") {
-  resetRealtime();
-  $("app-shell").classList.add("hidden");
-  $("auth-view").classList.remove("hidden");
-  $("boot-screen").classList.add("hidden");
-  setAuthMode("login");
-  if (message) setAuthFeedback(message);
-  document.title = "Sign in · MARRY BASE Management Studio";
+function renderUser() {
+  if (!state.user) return;
+  const label = state.user.name || state.user.email || "Operator";
+  $("user-name").textContent = label;
+  $("user-role").textContent = state.user.is_superadmin ? "superadmin" : "operator";
+  $("user-avatar").textContent = label.slice(0, 1).toUpperCase();
 }
 
-function showStudio() {
-  $("auth-view").classList.add("hidden");
-  $("boot-screen").classList.add("hidden");
-  $("app-shell").classList.remove("hidden");
-  $("current-user-label").textContent = state.user?.email || "Operator";
-  $("current-user-label").title = state.user?.is_superadmin ? `${state.user.email} · Superadmin` : state.user?.email || "";
-  $("user-avatar").textContent = initials(state.user);
-  void loadVersionLabel();
-}
-
-async function loadVersionLabel() {
-  const label = $("sidebar-version");
-  if (!label) return;
-  try {
-    const version = await api("/v1/platform/version", { timeout: 8_000 });
-    if (version?.version) label.textContent = `v${version.version}`;
-    label.title = version?.commit ? `Commit ${version.commit}` : "Installed platform version";
-  } catch {
-    label.title = "Version unavailable — the server did not answer the version endpoint.";
+function renderOrganizationsSelect() {
+  const select = $("org-select");
+  if (select) {
+    select.innerHTML = `<option value="">All workspaces</option>${state.organizations.map((org) => `<option value="${esc(org.slug)}">${esc(org.name)}</option>`).join("")}`;
+    if (state.activeOrgSlug && state.organizations.some((o) => o.slug === state.activeOrgSlug)) {
+      select.value = state.activeOrgSlug;
+    } else {
+      state.activeOrgSlug = "";
+      select.value = "";
+    }
+  }
+  const projOrgSelect = $("proj-org");
+  if (projOrgSelect) {
+    const activeOrg = state.organizations.find((o) => o.slug === state.activeOrgSlug);
+    projOrgSelect.innerHTML = `<option value="">Personal / Unassigned</option>${state.organizations.map((org) => `<option value="${esc(org.id)}">${esc(org.name)} (${esc(org.slug)})</option>`).join("")}`;
+    projOrgSelect.value = activeOrg?.id || "";
   }
 }
 
-async function checkHealth() {
-  const pill = $("health-pill");
-  if (!pill) return;
-  try {
-    const ready = await api("/ready", { skipRefresh: true, timeout: 10_000 });
-    pill.classList.remove("degraded");
-    pill.querySelector("span:last-child").textContent = "Healthy";
-    pill.title = `PostgreSQL ready · ${ready.pool?.mode || "connected"} · Worker ${ready.worker?.running ? "running" : "idle"}`;
-  } catch {
-    pill.classList.add("degraded");
-    pill.querySelector("span:last-child").textContent = "Degraded";
-    pill.title = "The instance is not ready. Click to retry.";
-  }
-}
-
-function currentHashTab() {
-  const tab = window.location.hash.replace(/^#\/?/, "").split("/")[0];
-  return PAGE_META[tab] ? tab : "overview";
-}
-
-async function activateRoute() {
-  if (!state.activeProject) {
-    state.activeTab = currentHashTab();
-    renderPage(state.activeTab);
+function updateProjectMeta() {
+  const project = state.activeProject;
+  const dot = $("project-status-dot");
+  if (!project) {
+    $("sidebar-schema-label").textContent = "No project selected";
+    dot?.classList.remove("active", "paused");
     return;
   }
-  const tab = currentHashTab();
-  if (state.ws && tab !== "realtime") {
-    // Keep an existing stream alive across views; only project changes and sign-out close it.
-  }
-  renderPage(tab);
-  if (tab === "sql") renderSqlHistory();
-  await loadPage(tab);
-  if (pendingLocalTab) {
-    activateLocalTab(pendingLocalTab);
-    pendingLocalTab = null;
-  }
+  $("sidebar-schema-label").textContent = project.schema_name || project.slug;
+  dot?.classList.toggle("active", project.status === "active");
+  dot?.classList.toggle("paused", project.status !== "active");
 }
 
-function navigate(tab, localTab = null) {
-  if (!PAGE_META[tab]) return;
-  pendingLocalTab = localTab;
-  closeSidebar();
-  if (currentHashTab() === tab && window.location.hash) {
-    void activateRoute().catch(reportError);
-  } else {
-    window.location.hash = tab;
+function renderProjectOptions(preferredSlug = null) {
+  const select = $("project-select");
+  if (!state.projects.length) {
+    state.activeProject = null;
+    select.innerHTML = `<option value="">No projects</option>`;
+    select.disabled = true;
+    updateProjectMeta();
+    return;
   }
+  select.disabled = false;
+  select.innerHTML = state.projects.map((project) => `<option value="${esc(project.slug)}">${esc(project.name)} (${esc(project.slug)})</option>`).join("");
+  const saved = preferredSlug || storageAdapter.get("maary_active_project");
+  const chosen = state.projects.find((project) => project.slug === saved) || state.projects[0];
+  select.value = chosen.slug;
+  state.activeProject = chosen;
+  storageAdapter.set("maary_active_project", chosen.slug);
+  updateProjectMeta();
 }
 
-async function selectProject(slug) {
-  if (!slug) return;
-  const sequence = ++projectSequence;
-  resetRealtime();
-  state.requestVersion += 1;
+function syncWorkspaceVisibility() {
+  const canRenderPage = Boolean(state.activeProject) || PROJECT_FREE_TABS.has(state.activeTab);
+  $("empty-projects-state").classList.toggle("hidden", canRenderPage);
+  $("page-root").classList.toggle("hidden", !canRenderPage);
+}
+
+async function refreshOrganizations() {
+  const res = await api("/v1/organizations");
+  state.organizations = res.organizations || [];
+  renderOrganizationsSelect();
+}
+
+async function refreshProjects(preferredSlug = null) {
+  const activeOrg = state.organizations.find((o) => o.slug === state.activeOrgSlug);
+  const query = activeOrg ? `?organizationId=${encodeURIComponent(activeOrg.id)}` : "";
+  const response = await api(`/v1/projects${query}`);
+  state.projects = response.projects || [];
+  renderProjectOptions(preferredSlug);
+  syncWorkspaceVisibility();
+}
+
+export async function navigateTo(tab, options = {}) {
+  const target = PAGE_META[tab] ? tab : "overview";
+  if (state.activeTab === "realtime" && target !== "realtime") closeRealtime();
+  state.activeTab = target;
+  document.querySelectorAll(".nav-item[data-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.tab === target);
+  });
+  setSidebarOpen(false);
+  if (options.updateHash !== false) {
+    const hash = `#${target}`;
+    if (window.location.hash !== hash) window.history.replaceState(null, "", hash);
+  }
+  syncWorkspaceVisibility();
+  if (!state.activeProject && !PROJECT_FREE_TABS.has(target)) return;
+  renderPageSkeleton(target);
+  if (target === "sql") renderSqlHistory();
+  await loadPage(target);
+}
+
+async function selectProject(slug, targetTab = null) {
+  const project = state.projects.find((item) => item.slug === slug);
+  if (!project) return;
+  closeRealtime();
+  state.activeProject = project;
   state.activeTable = null;
   state.activeBucket = null;
-  state.revealSecrets = false;
-  const listed = state.projects.find((project) => project.slug === slug);
-  state.activeProject = listed || { slug, name: slug };
-  storageAdapter.set("maary_active_project", slug);
-  $("project-select").value = slug;
-  $("sidebar-project-name").textContent = state.activeProject.name;
-  renderPage(currentHashTab());
-  try {
-    const details = await api(`/v1/projects/${encodeURIComponent(slug)}`);
-    if (sequence !== projectSequence) return;
-    state.activeProject = details.project;
-    state.projectDetails = details;
-    state.memberRole = details.memberRole;
-    const index = state.projects.findIndex((project) => project.slug === slug);
-    if (index >= 0) state.projects[index] = details.project;
-    $("sidebar-project-name").textContent = details.project.name;
-    await activateRoute();
-  } catch (error) {
-    if (sequence === projectSequence) reportError(error);
-  }
+  state.rowBrowser.offset = 0;
+  storageAdapter.set("maary_active_project", project.slug);
+  $("project-select").value = project.slug;
+  updateProjectMeta();
+  await navigateTo(targetTab || state.activeTab, { updateHash: false });
 }
 
-async function loadProjects(preferredSlug = null) {
-  const response = await api("/v1/projects");
-  state.projects = response.projects || [];
-  const select = $("project-select");
-  select.innerHTML = "";
-  select.disabled = state.projects.length === 0;
-  if (!state.projects.length) {
-    const option = document.createElement("option");
-    option.textContent = "No projects yet";
-    select.appendChild(option);
-    state.activeProject = null;
-    state.projectDetails = null;
-    $("sidebar-project-name").textContent = "No project selected";
-    renderPage(currentHashTab());
-    return;
-  }
-  for (const project of state.projects) {
-    const option = document.createElement("option");
-    option.value = project.slug;
-    option.textContent = project.name;
-    option.title = project.slug;
-    select.appendChild(option);
-  }
-  const stored = storageAdapter.get("maary_active_project");
-  const preferred = preferredSlug || state.activeProject?.slug || stored;
-  const selected = state.projects.find((project) => project.slug === preferred) || state.projects[0];
-  await selectProject(selected.slug);
+function showAuthScreen() {
+  closeRealtime();
+  state.user = null;
+  state.projects = [];
+  state.organizations = [];
+  state.activeProject = null;
+  $("app-shell").classList.add("hidden");
+  $("auth-screen").classList.remove("hidden");
 }
 
-async function handleAuthSubmit(button) {
-  const email = $("auth-email").value.trim();
-  const password = $("auth-password").value;
-  if (!email || !password || (authMode === "register" && password.length < 8)) {
-    setAuthFeedback("Enter a valid email and a password of at least 8 characters.");
+async function enterStudio(user) {
+  state.user = user;
+  renderUser();
+  $("auth-screen").classList.add("hidden");
+  $("app-shell").classList.remove("hidden");
+  await refreshOrganizations();
+  await refreshProjects();
+  const initialTab = window.location.hash.replace(/^#/, "");
+  await navigateTo(PAGE_META[initialTab] ? initialTab : "overview", { updateHash: true });
+}
+
+function buildCommandItems(query = "") {
+  const q = query.trim().toLowerCase();
+  const projectItems = state.projects.map((project) => ({
+    group: "Switch project",
+    label: project.name,
+    detail: `${project.slug} · ${project.schema_name}`,
+    icon: "layers",
+    projectSlug: project.slug,
+    shortcut: project.slug === state.activeProject?.slug ? "Active" : "",
+  }));
+  const orgItems = state.organizations.map((org) => ({
+    group: "Filter workspace",
+    label: org.name,
+    detail: `${org.slug} · ${org.project_count} project(s)`,
+    icon: "users",
+    orgSlug: org.slug,
+    shortcut: org.slug === state.activeOrgSlug ? "Selected" : "",
+  }));
+  const actionItems = [
+    { group: "Quick actions", label: "Create new project", detail: "Provision isolated PostgreSQL schema and keys", icon: "plus", run: () => openNewProject() },
+    { group: "Quick actions", label: "Create new workspace", detail: "Create an organization for team RBAC", icon: "users", run: () => openNewOrg() },
+    { group: "Quick actions", label: "Switch color theme", detail: "Toggle dark and light Studio appearance", icon: "sun", run: () => toggleTheme() },
+  ];
+  return [...COMMAND_ITEMS, ...orgItems, ...projectItems, ...actionItems].filter((item) =>
+    !q || `${item.group} ${item.label} ${item.detail}`.toLowerCase().includes(q)
+  );
+}
+
+function renderCommandPalette() {
+  const results = $("command-results");
+  state.commandItems = buildCommandItems($("command-search").value);
+  state.commandIndex = Math.min(state.commandIndex, Math.max(state.commandItems.length - 1, 0));
+  if (!state.commandItems.length) {
+    results.innerHTML = `<div class="empty-state compact"><p>No matching modules, workspaces, or projects.</p></div>`;
     return;
   }
-  setAuthFeedback();
-  await busy(button, async () => {
-    try {
-      const registering = authMode === "register";
-      const bootstrap = $("auth-bootstrap").value;
-      const result = await api(registering ? "/v1/platform/auth/register" : "/v1/platform/auth/login", {
-        method: "POST",
-        skipRefresh: true,
-        headers: registering && bootstrap ? { "x-platform-bootstrap-token": bootstrap } : {},
-        body: { email, password, ...(registering ? { name: $("auth-name").value } : {}) },
-      });
-      setSession(result);
-      state.user = result.user;
-      $("auth-form").reset();
-      showStudio();
-      await loadProjects();
-      showToast(`Welcome${state.user?.name ? `, ${state.user.name}` : ""}. Your workspace is ready.`, "success", "Signed in");
-      void checkHealth();
-    } catch (error) {
-      setAuthFeedback(error.message || "Authentication failed.");
-    }
-  }, authMode === "register" ? "Creating account…" : "Signing in…");
+  let currentGroup = "";
+  results.innerHTML = state.commandItems.map((item, index) => {
+    const heading = item.group !== currentGroup ? `<div class="command-group-label">${esc(item.group)}</div>` : "";
+    currentGroup = item.group;
+    return `${heading}<button class="command-item ${index === state.commandIndex ? "selected" : ""}" type="button" role="option" aria-selected="${index === state.commandIndex}" data-command-index="${index}">${icon(item.icon)}<span><strong>${esc(item.label)}</strong><small>${esc(item.detail)}</small></span>${item.shortcut ? `<kbd>${esc(item.shortcut)}</kbd>` : ""}</button>`;
+  }).join("");
+}
+
+function executeCommand(index) {
+  const item = state.commandItems[index];
+  if (!item) return;
+  closeDialog("command-dialog");
+  if (item.tab) navigateTo(item.tab).catch(reportError);
+  else if (item.projectSlug) selectProject(item.projectSlug).catch(reportError);
+  else if (item.orgSlug !== undefined) {
+    state.activeOrgSlug = item.orgSlug;
+    storageAdapter.set("maary_active_org", state.activeOrgSlug);
+    renderOrganizationsSelect();
+    refreshProjects().then(() => loadPage()).catch(reportError);
+  } else if (item.run) item.run();
+}
+
+function openCommandPalette() {
+  $("command-search").value = "";
+  state.commandIndex = 0;
+  renderCommandPalette();
+  openDialog("command-dialog");
+  window.setTimeout(() => $("command-search").focus(), 20);
+}
+
+function openNewProject() {
+  state.slugTouched = false;
+  $("create-project-form").reset();
+  renderOrganizationsSelect();
+  openDialog("new-project-dialog");
+  window.setTimeout(() => $("proj-name").focus(), 30);
+}
+
+function openNewOrg() {
+  state.orgSlugTouched = false;
+  $("create-org-form").reset();
+  openDialog("new-org-dialog");
+  window.setTimeout(() => $("org-name").focus(), 30);
 }
 
 async function logout() {
   try {
-    if (state.token) await api("/v1/platform/auth/logout", { method: "POST", skipRefresh: true, timeout: 8000 });
-  } catch { /* Local sign-out still proceeds if the server is unavailable. */ }
-  clearSession();
-  showAuth();
-}
-
-function openNewProject() {
-  const dialog = $("new-project-dialog");
-  if (!dialog.open) dialog.showModal();
-  window.setTimeout(() => $("proj-name").focus(), 60);
-}
-
-function openCommandPalette() {
-  const dialog = $("command-dialog");
-  if (!dialog.open) dialog.showModal();
-  $("command-search").value = "";
-  commandSelection = 0;
-  renderCommands();
-  window.setTimeout(() => $("command-search").focus(), 50);
-}
-
-function renderCommands() {
-  const query = $("command-search").value.trim().toLowerCase();
-  filteredCommands = commands.filter((command) => `${command.title} ${command.description} ${command.group}`.toLowerCase().includes(query));
-  commandSelection = Math.min(commandSelection, Math.max(filteredCommands.length - 1, 0));
-  const container = $("command-results");
-  if (!filteredCommands.length) {
-    container.innerHTML = `<div class="empty-state" style="min-height:110px"><p>No commands match “${esc(query)}”.</p></div>`;
-    return;
+    await api("/v1/platform/auth/logout", { method: "POST", allowUnauthorized: true });
+  } catch {
+    // Clear local session regardless
   }
-  let previousGroup = "";
-  container.innerHTML = filteredCommands.map((command, index) => {
-    const heading = command.group !== previousGroup ? `<span class="command-group-label">${esc(command.group)}</span>` : "";
-    previousGroup = command.group;
-    return `${heading}<button class="command-item ${index === commandSelection ? "selected" : ""}" data-command-index="${index}">${icon(command.icon)}<span><strong>${esc(command.title)}</strong><small>${esc(command.description)}</small></span>${command.tab ? `<kbd>${esc(command.tab)}</kbd>` : icon("chevron")}</button>`;
-  }).join("");
-  container.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
-}
-
-async function runCommand(index) {
-  const command = filteredCommands[index];
-  if (!command) return;
-  closeDialog("command-dialog");
-  if (command.tab) return navigate(command.tab);
-  switch (command.id) {
-    case "new-project": openNewProject(); break;
-    case "refresh": await loadPage(); showToast("View refreshed."); break;
-    case "theme": applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"); break;
-    case "apk": navigate("platform"); break;
-    case "logout": await logout(); break;
-    default: break;
-  }
-}
-
-function closeSidebar() {
-  $("sidebar").classList.remove("open");
-  $("sidebar-backdrop").classList.add("hidden");
-  document.querySelector('[data-action="toggle-sidebar"]')?.setAttribute("aria-expanded", "false");
-}
-
-function toggleSidebar() {
-  const open = !$("sidebar").classList.contains("open");
-  $("sidebar").classList.toggle("open", open);
-  $("sidebar-backdrop").classList.toggle("hidden", !open);
-  document.querySelector('[data-action="toggle-sidebar"]')?.setAttribute("aria-expanded", String(open));
-}
-
-async function handleGlobalAction(action, element) {
-  switch (action) {
-    case "toggle-password": {
-      const input = $(element.dataset.target);
-      const show = input.type === "password";
-      input.type = show ? "text" : "password";
-      element.setAttribute("aria-label", show ? "Hide password" : "Show password");
-      element.querySelector("use").setAttribute("href", show ? "#i-eye-off" : "#i-eye");
-      return true;
-    }
-    case "new-project": openNewProject(); return true;
-    case "theme-toggle": applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"); return true;
-    case "logout": await logout(); return true;
-    case "toggle-sidebar": toggleSidebar(); return true;
-    case "close-sidebar": closeSidebar(); return true;
-    case "health-check": await checkHealth(); showToast("Platform health check complete.", "info"); return true;
-    case "command-palette": openCommandPalette(); return true;
-    default: return false;
-  }
+  sessionTokens.clear();
+  showAuthScreen();
+  await refreshPlatformStatus();
+  showToast("You have been signed out.", "info", "Signed out");
 }
 
 function bindEvents() {
-  window.addEventListener("hashchange", () => void activateRoute().catch(reportError));
-  window.addEventListener("online", () => { $("offline-banner").classList.add("hidden"); void checkHealth(); });
-  window.addEventListener("offline", () => $("offline-banner").classList.remove("hidden"));
-  window.addEventListener("maary:unauthorized", () => { clearSession(); showAuth("Your session expired. Please sign in again."); });
-  window.addEventListener("maary:project-created", (event) => {
-    window.history.replaceState(null, "", "#overview");
-    state.activeTab = "overview";
-    void loadProjects(event.detail.slug).catch(reportError);
-  });
-  window.addEventListener("maary:project-deleted", () => {
-    state.activeProject = null;
-    window.history.replaceState(null, "", "#overview");
-    void loadProjects().catch(reportError);
-  });
-  window.addEventListener("maary:projects-refresh", (event) => void loadProjects(event.detail?.slug).catch(reportError));
+  document.addEventListener("click", (event) => {
+    const authModeBtn = event.target.closest("[data-auth-mode]");
+    if (authModeBtn) { setAuthMode(authModeBtn.dataset.authMode); return; }
 
-  document.addEventListener("click", async (event) => {
-    const authModeButton = event.target.closest("[data-auth-mode]");
-    if (authModeButton) { setAuthMode(authModeButton.dataset.authMode); return; }
-    const closeButton = event.target.closest("[data-close-dialog]");
-    if (closeButton) { closeDialog(closeButton.dataset.closeDialog); return; }
+    const closeBtn = event.target.closest("[data-close-dialog]");
+    if (closeBtn) { closeDialog(closeBtn.dataset.closeDialog); return; }
+
+    const commandBtn = event.target.closest("[data-command-index]");
+    if (commandBtn) { executeCommand(Number(commandBtn.dataset.commandIndex)); return; }
+
     const localTab = event.target.closest("[data-local-tab]");
     if (localTab) { activateLocalTab(localTab.dataset.localTab); return; }
-    const commandItem = event.target.closest("[data-command-index]");
-    if (commandItem) { await runCommand(Number(commandItem.dataset.commandIndex)).catch(reportError); return; }
-    const nav = event.target.closest("[data-nav], .nav-item[data-tab]");
-    if (nav) { navigate(nav.dataset.nav || nav.dataset.tab, nav.dataset.localTarget || null); return; }
-    const actionElement = event.target.closest("[data-action]");
-    if (!actionElement || actionElement.matches("select, input, textarea")) return;
-    event.preventDefault();
-    const action = actionElement.dataset.action;
-    try {
-      if (await handleGlobalAction(action, actionElement)) return;
-      if (actionElement.tagName === "BUTTON") {
-        await busy(actionElement, () => handleAction(action, actionElement));
-      } else await handleAction(action, actionElement);
-    } catch (error) { reportError(error); }
-  });
 
-  document.addEventListener("submit", async (event) => {
-    const form = event.target;
-    if (!(form instanceof HTMLFormElement) || !form.id) return;
-    event.preventDefault();
-    const button = event.submitter || form.querySelector('button[type="submit"]');
-    try {
-      if (form.id === "auth-form") await handleAuthSubmit(button);
-      else await busy(button, () => handleSubmit(form));
-    } catch (error) { reportError(error); }
-  });
-
-  document.addEventListener("change", async (event) => {
-    const element = event.target;
-    if (element.id === "project-select") {
-      await selectProject(element.value).catch(reportError);
+    const navEl = event.target.closest("[data-tab], [data-nav]");
+    if (navEl) {
+      event.preventDefault();
+      navigateTo(navEl.dataset.tab || navEl.dataset.nav).catch(reportError);
       return;
     }
-    try { await handleChange(element); } catch (error) { reportError(error); await loadPage().catch(() => {}); }
+
+    const actionEl = event.target.closest("[data-action]");
+    if (!actionEl) return;
+    const action = actionEl.dataset.action;
+    if (action === "toggle-theme") { toggleTheme(); return; }
+    if (action === "toggle-sidebar") { setSidebarOpen(!$("sidebar").classList.contains("open")); return; }
+    if (action === "close-sidebar") { setSidebarOpen(false); return; }
+    if (action === "open-new-project") { openNewProject(); return; }
+    if (action === "open-new-org") { openNewOrg(); return; }
+    if (action === "open-command-palette") { openCommandPalette(); return; }
+    if (action === "cancel-confirm") { settleConfirm(false); return; }
+    if (action === "logout") { logout().catch(reportError); return; }
+    handleAction(action, actionEl).catch(reportError);
+  });
+
+  document.querySelectorAll("dialog.modal").forEach((dialog) => {
+    dialog.addEventListener("click", (event) => {
+      if (event.target !== dialog) return;
+      if (dialog.id === "confirm-dialog") settleConfirm(false);
+      else closeDialog(dialog.id);
+    });
+  });
+
+  $("confirm-dialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    settleConfirm(false);
+  });
+
+  $("confirm-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (state.confirmRequireText && $("confirm-input").value.trim() !== state.confirmRequireText) return;
+    settleConfirm(true);
+  });
+
+  $("confirm-input").addEventListener("input", (event) => {
+    if (state.confirmRequireText) {
+      $("confirm-submit-btn").disabled = event.target.value.trim() !== state.confirmRequireText;
+    }
+  });
+
+  $("auth-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    $("auth-error").classList.add("hidden");
+    const mode = $("auth-form").dataset.mode || "login";
+    const email = $("auth-email").value.trim();
+    const password = $("auth-password").value;
+    const name = $("auth-name").value.trim();
+    const bootstrapToken = $("auth-bootstrap-token")?.value?.trim() || undefined;
+    if (!email || !password) {
+      showAuthError("Enter both your email address and password.");
+      return;
+    }
+    try {
+      await withButtonBusy($("auth-submit-btn"), async () => {
+        const headers = {};
+        if (mode === "register" && bootstrapToken) {
+          headers["x-platform-bootstrap-token"] = bootstrapToken;
+        }
+        const response = await api(
+          mode === "register" ? "/v1/platform/auth/register" : "/v1/platform/auth/login",
+          {
+            method: "POST",
+            headers,
+            body: mode === "register" ? { email, password, name: name || undefined, bootstrapToken } : { email, password },
+            allowUnauthorized: true,
+            skipPlatformAuth: true,
+          }
+        );
+        if (response.accessToken) {
+          sessionTokens.save(response.accessToken, response.refreshToken);
+        }
+        $("auth-form").reset();
+        await enterStudio(response.user);
+      }, mode === "register" ? "Creating account…" : "Signing in…");
+    } catch (error) {
+      showAuthError(error.message);
+    }
+  });
+
+  document.addEventListener("submit", (event) => {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement) || form.id === "auth-form" || form.id === "confirm-form") return;
+    event.preventDefault();
+    const submitter = event.submitter instanceof HTMLButtonElement ? event.submitter : form.querySelector('button[type="submit"]');
+    withButtonBusy(submitter, () => handleSubmit(form), "Working…").catch(reportError);
+  });
+
+  document.addEventListener("change", (event) => {
+    if (event.target.id === "project-select") {
+      selectProject(event.target.value).catch(reportError);
+      return;
+    }
+    if (event.target.id === "org-select") {
+      state.activeOrgSlug = event.target.value;
+      storageAdapter.set("maary_active_org", state.activeOrgSlug);
+      refreshProjects()
+        .then(() => {
+          if (state.activeProject || PROJECT_FREE_TABS.has(state.activeTab)) return loadPage();
+          return undefined;
+        })
+        .catch(reportError);
+      return;
+    }
+    handleChange(event.target).catch(reportError);
   });
 
   document.addEventListener("input", (event) => {
-    const element = event.target;
-    if (element.id === "proj-name" && !state.slugTouched) $("proj-slug").value = slugify(element.value);
-    if (element.id === "proj-slug") state.slugTouched = Boolean(element.value);
-    if (element.id === "command-search") { commandSelection = 0; renderCommands(); }
-    handleInput(element);
+    const target = event.target;
+    if (target.id === "proj-slug") { state.slugTouched = Boolean(target.value.trim()); return; }
+    if (target.id === "proj-name" && !state.slugTouched) { $("proj-slug").value = slugify(target.value); return; }
+    if (target.id === "org-slug") { state.orgSlugTouched = Boolean(target.value.trim()); return; }
+    if (target.id === "org-name" && !state.orgSlugTouched) { $("org-slug").value = slugify(target.value); return; }
+    if (target.id === "command-search") { state.commandIndex = 0; renderCommandPalette(); return; }
+    handleInput(target);
   });
 
-  document.addEventListener("keydown", async (event) => {
+  document.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
       event.preventDefault();
-      if (state.user) openCommandPalette();
+      if (!state.user) return;
+      if ($("command-dialog").open) closeDialog("command-dialog");
+      else openCommandPalette();
       return;
     }
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && event.target.id === "sql-editor-input") {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && event.target?.id === "sql-editor-input") {
       event.preventDefault();
-      $("sql-form").requestSubmit();
+      $("sql-form")?.requestSubmit();
       return;
     }
-    if ($("command-dialog").open && ["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) {
+    if (!$("command-dialog").open) return;
+    if (event.key === "ArrowDown") {
       event.preventDefault();
-      if (event.key === "Enter") await runCommand(commandSelection).catch(reportError);
-      else {
-        const direction = event.key === "ArrowDown" ? 1 : -1;
-        commandSelection = Math.max(0, Math.min(filteredCommands.length - 1, commandSelection + direction));
-        renderCommands();
-      }
+      state.commandIndex = Math.min(state.commandIndex + 1, Math.max(state.commandItems.length - 1, 0));
+      renderCommandPalette();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      state.commandIndex = Math.max(state.commandIndex - 1, 0);
+      renderCommandPalette();
+    } else if (event.key === "Enter" && state.commandItems.length) {
+      event.preventDefault();
+      executeCommand(state.commandIndex);
     }
   });
 
-  document.querySelectorAll("dialog").forEach((dialog) => {
-    dialog.addEventListener("click", (event) => {
-      if (event.target === dialog) {
-        const bounds = dialog.getBoundingClientRect();
-        const inside = event.clientX >= bounds.left && event.clientX <= bounds.right && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
-        if (!inside && dialog.id !== "confirm-dialog") dialog.close();
+  window.addEventListener("hashchange", () => {
+    if (!state.user) return;
+    const tab = window.location.hash.replace(/^#/, "");
+    if (PAGE_META[tab] && tab !== state.activeTab) navigateTo(tab, { updateHash: false }).catch(reportError);
+  });
+
+  window.addEventListener("maary:unauthorized", () => {
+    if (state.user) {
+      sessionTokens.clear();
+      showAuthScreen();
+      showToast("Your session expired. Sign in again to continue.", "warning", "Session expired");
+    }
+  });
+
+  window.addEventListener("maary:orgs-refresh", async () => {
+    try {
+      await refreshOrganizations();
+      await refreshProjects(state.activeProject?.slug);
+    } catch (error) { reportError(error); }
+  });
+
+  window.addEventListener("maary:select-project", async (event) => {
+    try {
+      const slug = event.detail?.slug;
+      const tab = event.detail?.tab || "overview";
+      if (!state.projects.some((p) => p.slug === slug)) {
+        state.activeOrgSlug = "";
+        storageAdapter.remove("maary_active_org");
+        renderOrganizationsSelect();
+        await refreshProjects(slug);
       }
-    });
+      await selectProject(slug, tab);
+    } catch (error) { reportError(error); }
+  });
+
+  window.addEventListener("maary:project-created", async (event) => {
+    try {
+      await refreshOrganizations();
+      await refreshProjects(event.detail?.slug);
+      await navigateTo("overview");
+    } catch (error) { reportError(error); }
+  });
+
+  window.addEventListener("maary:project-deleted", async () => {
+    try {
+      await refreshOrganizations();
+      await refreshProjects();
+      if (state.activeProject) await navigateTo("overview");
+    } catch (error) { reportError(error); }
+  });
+
+  window.addEventListener("maary:projects-refresh", async (event) => {
+    try { await refreshProjects(event.detail?.slug); } catch (error) { reportError(error); }
   });
 }
 
 async function init() {
-  applyTheme(storageAdapter.get("maary_studio_theme") || "dark");
+  applyTheme(storageAdapter.get("maary_theme") || "dark");
+  setAuthMode("login");
   bindEvents();
-  $("offline-banner").classList.toggle("hidden", navigator.onLine);
-  void checkHealth();
-  window.setInterval(() => { if (!document.hidden) void checkHealth(); }, 60_000);
-  if (!state.token) {
-    showAuth();
-    return;
-  }
+  await refreshPlatformStatus();
   try {
-    const result = await api("/v1/platform/auth/me");
-    state.user = result.user;
-    showStudio();
-    await loadProjects();
-  } catch (error) {
-    if (error?.status === 401 || error?.status === 403) clearSession();
-    showAuth(error?.status !== 401 && error?.status !== 403 ? "The server could not be reached. Your saved session will be retried on the next visit." : "");
-  } finally {
-    $("boot-screen").classList.add("hidden");
+    const response = await api("/v1/platform/auth/me", { allowUnauthorized: true });
+    await enterStudio(response.user);
+  } catch {
+    showAuthScreen();
   }
 }
 
-void init();
+init().catch(reportError);

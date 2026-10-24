@@ -1,16 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    Cleartext HTTP is permitted at the platform level so an operator can reach a
-    self-hosted instance on a private LAN during setup. MARRY BASEServerConfig
-    enforces the application policy: HTTPS is required for public hosts, and
-    plain HTTP is accepted only for loopback, emulator loopback, and RFC1918 /
-    link-local private addresses. The Studio itself is served from the operator's
-    server, so TLS there is the operator's responsibility.
--->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true">
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
 </network-security-config>

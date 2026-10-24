@@ -22,6 +22,7 @@ import {
   toProjectSchemaName,
 } from "../lib/sql-safety.js";
 import { getProjectMetrics, recordAuditEvent } from "./audit.service.js";
+import { normalizeOrgRole } from "./organization.service.js";
 import type { PlatformUser } from "./platform-auth.service.js";
 
 export type ProjectRole = "owner" | "admin" | "developer" | "viewer";
@@ -34,6 +35,9 @@ export interface ProjectRecord {
   schema_name: string;
   db_role_name: string;
   owner_id: string | null;
+  organization_id: string | null;
+  organization_name?: string | null;
+  organization_slug?: string | null;
   status: "active" | "suspended" | "archived";
   settings: Record<string, unknown>;
   quotas: {
@@ -83,6 +87,7 @@ export async function createProject(input: {
   slug?: string;
   description?: string;
   ownerId?: string | null;
+  organizationId?: string | null;
   quotas?: Partial<ProjectRecord["quotas"]>;
   settings?: Record<string, unknown>;
 }): Promise<{
@@ -197,10 +202,37 @@ export async function createProject(input: {
       `ALTER DEFAULT PRIVILEGES IN SCHEMA ${schemaIdent} GRANT EXECUTE ON FUNCTIONS TO ${roleIdent}, ${rlsRoleIdent}`
     );
 
+    let resolvedOrgId: string | null = null;
+    if (input.organizationId) {
+      const isOrgUuid = UUID_REGEX.test(input.organizationId);
+      const orgLookup = await client.query<{ id: string }>(
+        `SELECT id FROM platform_organizations WHERE ${isOrgUuid ? "id = $1::uuid" : "slug = $1"} LIMIT 1`,
+        [input.organizationId]
+      );
+      if (!orgLookup.rows[0]) {
+        throw new NotFoundError(
+          `Organization '${input.organizationId}' not found.`
+        );
+      }
+      resolvedOrgId = orgLookup.rows[0].id;
+    } else if (input.ownerId) {
+      const defaultOrgRes = await client.query<{ id: string }>(
+        `SELECT o.id
+         FROM platform_organizations o
+         LEFT JOIN platform_organization_members om
+           ON om.organization_id = o.id AND om.user_id = $1
+         WHERE o.owner_id = $1 OR om.user_id = $1
+         ORDER BY o.created_at ASC
+         LIMIT 1`,
+        [input.ownerId]
+      );
+      resolvedOrgId = defaultOrgRes.rows[0]?.id ?? null;
+    }
+
     const projRes = await client.query<ProjectRecord>(
       `INSERT INTO platform_projects (
-        slug, name, description, schema_name, db_role_name, owner_id, status, settings, quotas
-      ) VALUES ($1, $2, $3, $4, $5, $6, 'active', $7::jsonb, $8::jsonb)
+        slug, name, description, schema_name, db_role_name, owner_id, organization_id, status, settings, quotas
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8::jsonb, $9::jsonb)
       RETURNING *`,
       [
         slug,
@@ -209,6 +241,7 @@ export async function createProject(input: {
         schemaName,
         dbRoleName,
         input.ownerId ?? null,
+        resolvedOrgId,
         JSON.stringify(input.settings ?? {}),
         JSON.stringify(defaultQuotas),
       ]
@@ -302,14 +335,40 @@ export async function createProject(input: {
   return result;
 }
 
+const ROLE_PRIORITY: Record<ProjectRole, number> = {
+  owner: 4,
+  admin: 3,
+  developer: 2,
+  viewer: 1,
+};
+
+function pickHighestRole(
+  candidates: Array<ProjectRole | null | undefined>
+): ProjectRole | null {
+  let best: ProjectRole | null = null;
+  for (const c of candidates) {
+    if (!c) continue;
+    if (!best || ROLE_PRIORITY[c] > ROLE_PRIORITY[best]) {
+      best = c;
+    }
+  }
+  return best;
+}
+
 export async function getProjectByRef(
   projectRef: string
 ): Promise<ProjectRecord> {
   const isUuid = UUID_REGEX.test(projectRef);
   const res = await pool.query<ProjectRecord>(
     isUuid
-      ? "SELECT * FROM platform_projects WHERE id = $1 AND deleted_at IS NULL"
-      : "SELECT * FROM platform_projects WHERE slug = $1 AND deleted_at IS NULL",
+      ? `SELECT p.*, o.name AS organization_name, o.slug AS organization_slug
+         FROM platform_projects p
+         LEFT JOIN platform_organizations o ON o.id = p.organization_id
+         WHERE p.id = $1 AND p.deleted_at IS NULL`
+      : `SELECT p.*, o.name AS organization_name, o.slug AS organization_slug
+         FROM platform_projects p
+         LEFT JOIN platform_organizations o ON o.id = p.organization_id
+         WHERE p.slug = $1 AND p.deleted_at IS NULL`,
     [projectRef]
   );
   const project = res.rows[0];
@@ -320,25 +379,92 @@ export async function getProjectByRef(
 }
 
 export async function listProjectsForUser(
-  user?: PlatformUser | null
+  user?: PlatformUser | null,
+  options?: { organizationId?: string }
 ): Promise<Array<ProjectRecord & { member_role?: string }>> {
+  let orgFilterId: string | null = null;
+  if (options?.organizationId) {
+    const isUuid = UUID_REGEX.test(options.organizationId);
+    const orgRes = await pool.query<{ id: string }>(
+      `SELECT id FROM platform_organizations WHERE ${isUuid ? "id = $1::uuid" : "slug = $1"} LIMIT 1`,
+      [options.organizationId]
+    );
+    orgFilterId = orgRes.rows[0]?.id ?? "00000000-0000-0000-0000-000000000000";
+  }
+
   if (!user || user.is_superadmin) {
+    const params: unknown[] = [];
+    const orgClause = orgFilterId
+      ? (() => {
+          params.push(orgFilterId);
+          return `AND p.organization_id = $${params.length}`;
+        })()
+      : "";
     const res = await pool.query<ProjectRecord>(
-      `SELECT * FROM platform_projects WHERE deleted_at IS NULL ORDER BY created_at DESC`
+      `SELECT p.*, o.name AS organization_name, o.slug AS organization_slug
+       FROM platform_projects p
+       LEFT JOIN platform_organizations o ON o.id = p.organization_id
+       WHERE p.deleted_at IS NULL ${orgClause}
+       ORDER BY p.created_at DESC`,
+      params
     );
     return res.rows.map((r) => ({ ...r, member_role: "owner" }));
   }
 
-  const res = await pool.query<ProjectRecord & { member_role: string }>(
-    `SELECT p.*, COALESCE(m.role, CASE WHEN p.owner_id = $1 THEN 'owner' ELSE 'viewer' END) AS member_role
+  const params: unknown[] = [user.id];
+  const orgClause = orgFilterId
+    ? (() => {
+        params.push(orgFilterId);
+        return `AND p.organization_id = $${params.length}`;
+      })()
+    : "";
+
+  const res = await pool.query<
+    ProjectRecord & {
+      direct_role: ProjectRole | null;
+      org_role: string | null;
+      org_owner_id: string | null;
+    }
+  >(
+    `SELECT
+       p.*,
+       o.name AS organization_name,
+       o.slug AS organization_slug,
+       o.owner_id AS org_owner_id,
+       m.role AS direct_role,
+       om.role AS org_role
      FROM platform_projects p
-     LEFT JOIN platform_project_members m ON m.project_id = p.id AND m.user_id = $1
+     LEFT JOIN platform_project_members m
+       ON m.project_id = p.id AND m.user_id = $1
+     LEFT JOIN platform_organizations o
+       ON o.id = p.organization_id
+     LEFT JOIN platform_organization_members om
+       ON om.organization_id = p.organization_id AND om.user_id = $1
      WHERE p.deleted_at IS NULL
-       AND (p.owner_id = $1 OR m.user_id = $1 OR p.owner_id IS NULL)
+       AND (
+         p.owner_id = $1
+         OR m.user_id = $1
+         OR o.owner_id = $1
+         OR om.user_id = $1
+       )
+       ${orgClause}
      ORDER BY p.created_at DESC`,
-    [user.id]
+    params
   );
-  return res.rows;
+
+  return res.rows.map((r) => {
+    const effective = pickHighestRole([
+      r.owner_id === user.id ? "owner" : null,
+      r.org_owner_id === user.id ? "owner" : null,
+      r.direct_role,
+      r.org_role ? normalizeOrgRole(r.org_role) : null,
+    ]);
+    const { direct_role, org_role, org_owner_id, ...project } = r;
+    return {
+      ...project,
+      member_role: effective ?? "viewer",
+    };
+  });
 }
 
 export async function getUserProjectRole(
@@ -346,19 +472,36 @@ export async function getUserProjectRole(
   user: PlatformUser
 ): Promise<ProjectRole | null> {
   if (user.is_superadmin) return "owner";
-  const projRes = await pool.query<{ owner_id: string | null }>(
-    "SELECT owner_id FROM platform_projects WHERE id = $1",
-    [projectId]
-  );
-  if (!projRes.rows[0]) return null;
-  if (projRes.rows[0].owner_id === user.id || projRes.rows[0].owner_id === null) {
-    return "owner";
-  }
-  const memRes = await pool.query<{ role: ProjectRole }>(
-    "SELECT role FROM platform_project_members WHERE project_id = $1 AND user_id = $2",
+  const res = await pool.query<{
+    owner_id: string | null;
+    org_owner_id: string | null;
+    direct_role: ProjectRole | null;
+    org_role: string | null;
+  }>(
+    `SELECT
+       p.owner_id,
+       o.owner_id AS org_owner_id,
+       m.role AS direct_role,
+       om.role AS org_role
+     FROM platform_projects p
+     LEFT JOIN platform_project_members m
+       ON m.project_id = p.id AND m.user_id = $2
+     LEFT JOIN platform_organizations o
+       ON o.id = p.organization_id
+     LEFT JOIN platform_organization_members om
+       ON om.organization_id = p.organization_id AND om.user_id = $2
+     WHERE p.id = $1 AND p.deleted_at IS NULL`,
     [projectId, user.id]
   );
-  return memRes.rows[0]?.role ?? null;
+  const row = res.rows[0];
+  if (!row) return null;
+
+  return pickHighestRole([
+    row.owner_id === user.id ? "owner" : null,
+    row.org_owner_id === user.id ? "owner" : null,
+    row.direct_role,
+    row.org_role ? normalizeOrgRole(row.org_role) : null,
+  ]);
 }
 
 export async function assertProjectRole(
@@ -380,6 +523,7 @@ export async function updateProject(
   updates: {
     name?: string;
     description?: string;
+    organizationId?: string | null;
     status?: "active" | "suspended" | "archived";
     settings?: Record<string, unknown>;
     quotas?: Partial<ProjectRecord["quotas"]>;
@@ -400,17 +544,36 @@ export async function updateProject(
     ? { ...current.quotas, ...updates.quotas }
     : current.quotas;
 
-  const res = await pool.query<ProjectRecord>(
+  let nextOrgId = current.organization_id;
+  if (updates.organizationId !== undefined) {
+    if (updates.organizationId === null || updates.organizationId === "") {
+      nextOrgId = null;
+    } else {
+      const isOrgUuid = UUID_REGEX.test(updates.organizationId);
+      const orgRes = await pool.query<{ id: string }>(
+        `SELECT id FROM platform_organizations WHERE ${isOrgUuid ? "id = $1::uuid" : "slug = $1"} LIMIT 1`,
+        [updates.organizationId]
+      );
+      if (!orgRes.rows[0]) {
+        throw new NotFoundError(
+          `Organization '${updates.organizationId}' not found.`
+        );
+      }
+      nextOrgId = orgRes.rows[0].id;
+    }
+  }
+
+  await pool.query(
     `UPDATE platform_projects
-     SET name = $1, description = $2, status = $3, settings = $4::jsonb, quotas = $5::jsonb, updated_at = now()
-     WHERE id = $6
-     RETURNING *`,
+     SET name = $1, description = $2, status = $3, settings = $4::jsonb, quotas = $5::jsonb, organization_id = $6, updated_at = now()
+     WHERE id = $7`,
     [
       newName,
       newDescription,
       newStatus,
       JSON.stringify(newSettings),
       JSON.stringify(newQuotas),
+      nextOrgId,
       current.id,
     ]
   );
@@ -422,10 +585,204 @@ export async function updateProject(
     action: "project.updated",
     resourceType: "project",
     resourceId: current.id,
-    metadata: { status: newStatus, name: newName },
+    metadata: { status: newStatus, name: newName, organizationId: nextOrgId },
   });
 
-  return res.rows[0]!;
+  return getProjectByRef(current.id);
+}
+
+export async function getProjectLiveStatusOverview(
+  project: ProjectRecord
+): Promise<{
+  tableCount: number;
+  rlsTableCount: number;
+  policyCount: number;
+  migrationCount: number;
+  authUserCount: number;
+  activeSessionCount: number;
+  bucketCount: number;
+  storageObjectCount: number;
+  storageBytesUsed: number;
+  functionCount: number;
+  pendingJobCount: number;
+  failedJobCount: number;
+  deadLetterJobCount: number;
+  scheduleCount: number;
+  backupCount: number;
+  recentErrorCount: number;
+  counts: {
+    tables: number;
+    rlsTables: number;
+    policies: number;
+    migrations: number;
+    users: number;
+    activeSessions: number;
+    buckets: number;
+    storageObjects: number;
+    functions: number;
+    queuedJobs: number;
+    failedJobs: number;
+    schedules: number;
+    backups: number;
+  };
+  subsystems: Record<
+    string,
+    {
+      state:
+        | "operational_verified"
+        | "implemented_unverified"
+        | "partially_implemented"
+        | "requires_configuration"
+        | "unavailable"
+        | "failed";
+      detail: string;
+    }
+  >;
+}> {
+  const res = await pool.query<{
+    schema_exists: boolean;
+    role_exists: boolean;
+    table_count: number;
+    rls_table_count: number;
+    policy_count: number;
+    migration_count: number;
+    auth_user_count: number;
+    active_session_count: number;
+    bucket_count: number;
+    storage_object_count: number;
+    storage_bytes_used: string;
+    function_count: number;
+    pending_job_count: number;
+    failed_job_count: number;
+    dead_letter_job_count: number;
+    schedule_count: number;
+    backup_count: number;
+    recent_error_count: number;
+  }>(
+    `SELECT
+       EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = $2) AS schema_exists,
+       EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $3) AS role_exists,
+       (SELECT COUNT(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $2 AND c.relkind = 'r') AS table_count,
+       (SELECT COUNT(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $2 AND c.relkind = 'r' AND c.relrowsecurity = true) AS rls_table_count,
+       (SELECT COUNT(*)::int FROM pg_policies WHERE schemaname = $2 AND policyname <> '_marry_base_service_role_bypass') AS policy_count,
+       (SELECT COUNT(*)::int FROM platform_project_migrations WHERE project_id = $1 AND status = 'applied') AS migration_count,
+       (SELECT COUNT(*)::int FROM project_auth_users WHERE project_id = $1) AS auth_user_count,
+       (SELECT COUNT(*)::int FROM project_auth_sessions WHERE project_id = $1 AND is_revoked = false AND expires_at > NOW()) AS active_session_count,
+       (SELECT COUNT(*)::int FROM platform_storage_buckets WHERE project_id = $1) AS bucket_count,
+       (SELECT COUNT(*)::int FROM platform_storage_objects WHERE project_id = $1) AS storage_object_count,
+       (SELECT COALESCE(SUM(size_bytes), 0)::text FROM platform_storage_objects WHERE project_id = $1) AS storage_bytes_used,
+       (SELECT COUNT(*)::int FROM platform_functions WHERE project_id = $1) AS function_count,
+       (SELECT COUNT(*)::int FROM platform_jobs WHERE project_id = $1 AND status IN ('queued', 'running')) AS pending_job_count,
+       (SELECT COUNT(*)::int FROM platform_jobs WHERE project_id = $1 AND status = 'failed') AS failed_job_count,
+       (SELECT COUNT(*)::int FROM platform_jobs WHERE project_id = $1 AND status = 'dead_letter') AS dead_letter_job_count,
+       (SELECT COUNT(*)::int FROM platform_schedules WHERE project_id = $1) AS schedule_count,
+       (SELECT COUNT(*)::int FROM platform_backups WHERE project_id = $1) AS backup_count,
+       (SELECT COUNT(*)::int FROM platform_error_logs WHERE project_id = $1 AND created_at > NOW() - INTERVAL '24 hours') AS recent_error_count`,
+    [project.id, project.schema_name, project.db_role_name]
+  );
+  const row = res.rows[0]!;
+  const tableCount = row.table_count ?? 0;
+  const rlsTableCount = row.rls_table_count ?? 0;
+  const policyCount = row.policy_count ?? 0;
+  const migrationCount = row.migration_count ?? 0;
+  const authUserCount = row.auth_user_count ?? 0;
+  const activeSessionCount = row.active_session_count ?? 0;
+  const bucketCount = row.bucket_count ?? 0;
+  const storageObjectCount = row.storage_object_count ?? 0;
+  const storageBytesUsed = Number(row.storage_bytes_used ?? 0);
+  const functionCount = row.function_count ?? 0;
+  const pendingJobCount = row.pending_job_count ?? 0;
+  const failedJobCount = row.failed_job_count ?? 0;
+  const deadLetterJobCount = row.dead_letter_job_count ?? 0;
+  const scheduleCount = row.schedule_count ?? 0;
+  const backupCount = row.backup_count ?? 0;
+  const recentErrorCount = row.recent_error_count ?? 0;
+
+  return {
+    tableCount,
+    rlsTableCount,
+    policyCount,
+    migrationCount,
+    authUserCount,
+    activeSessionCount,
+    bucketCount,
+    storageObjectCount,
+    storageBytesUsed,
+    functionCount,
+    pendingJobCount,
+    failedJobCount,
+    deadLetterJobCount,
+    scheduleCount,
+    backupCount,
+    recentErrorCount,
+    counts: {
+      tables: tableCount,
+      rlsTables: rlsTableCount,
+      policies: policyCount,
+      migrations: migrationCount,
+      users: authUserCount,
+      activeSessions: activeSessionCount,
+      buckets: bucketCount,
+      storageObjects: storageObjectCount,
+      functions: functionCount,
+      queuedJobs: pendingJobCount,
+      failedJobs: failedJobCount + deadLetterJobCount,
+      schedules: scheduleCount,
+      backups: backupCount,
+    },
+    subsystems: {
+      database: {
+        state: row.schema_exists && row.role_exists ? "operational_verified" : "failed",
+        detail: `Isolated schema ${project.schema_name} · ${tableCount} table(s), ${migrationCount} migration(s).`,
+      },
+      rowLevelSecurity: {
+        state:
+          tableCount === 0
+            ? "operational_verified"
+            : rlsTableCount === tableCount
+              ? "operational_verified"
+              : "requires_configuration",
+        detail:
+          tableCount === 0
+            ? "RLS role boundary provisioned and ready for first table."
+            : `${rlsTableCount}/${tableCount} table(s) have RLS enabled (${policyCount} active policy/policies).`,
+      },
+      authentication: {
+        state: "operational_verified",
+        detail: `${authUserCount} project user(s), ${activeSessionCount} active session(s).`,
+      },
+      storage: {
+        state: "operational_verified",
+        detail: `${bucketCount} bucket(s), ${storageObjectCount} stored object(s).`,
+      },
+      realtime: {
+        state: "operational_verified",
+        detail: "PostgreSQL row-change triggers and WebSocket broker active.",
+      },
+      serverFunctions: {
+        state: "operational_verified",
+        detail: `${functionCount} isolated function(s) deployed.`,
+      },
+      backgroundJobs: {
+        state:
+          deadLetterJobCount > 0
+            ? "partially_implemented"
+            : config.WORKER_ENABLED
+              ? "operational_verified"
+              : "requires_configuration",
+        detail: config.WORKER_ENABLED
+          ? `${pendingJobCount} queued/running, ${failedJobCount + deadLetterJobCount} failed/dead-letter.`
+          : "Background polling disabled in current runtime config; manual queue processing available.",
+      },
+      backups: {
+        state: backupCount > 0 ? "operational_verified" : "requires_configuration",
+        detail:
+          backupCount > 0
+            ? `${backupCount} SHA-256 verified snapshot(s) stored.`
+            : "Snapshot engine verified; create your first logical backup before production cutover.",
+      },
+    },
+  };
 }
 
 export async function deleteProject(

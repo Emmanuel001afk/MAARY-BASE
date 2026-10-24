@@ -1,10 +1,11 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm install
+RUN npm ci
 COPY tsconfig.json ./
 COPY assets ./assets
 COPY public ./public
+COPY android ./android
 COPY src ./src
 RUN npm run build
 
@@ -13,18 +14,17 @@ ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=4100
 WORKDIR /app
-COPY --from=build /app/package.json /app/package-lock.json ./
+COPY --from=build /app/package.json /app/package-lock.json* ./
 RUN npm ci --omit=dev
 COPY --from=build /app/assets ./assets
 COPY --from=build /app/public ./public
+COPY --from=build /app/android ./android
 COPY --from=build /app/dist ./dist
-COPY src/db/migrations ./src/db/migrations
-# The Android artifact directory is a volume/bind mount (see docker-compose.yml).
-# The API reports "not_built" when no Gradle-built APK is present and never
-# fabricates one.
+COPY --from=build /app/src/db/migrations ./dist/db/migrations
+COPY --from=build /app/src/db/migrations ./src/db/migrations
 RUN mkdir -p /app/data /app/storage /app/data/backups /app/releases && chown -R node:node /app
 USER node
-VOLUME ["/app/data", "/app/storage", "/app/releases"]
+VOLUME ["/app/data", "/app/storage"]
 EXPOSE 4100
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
   CMD wget -qO- http://127.0.0.1:4100/health || exit 1
