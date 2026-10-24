@@ -22,7 +22,7 @@ function unpackApk(apk: Buffer): Map<string, Buffer> {
   return entries;
 }
 
-test("health and readiness endpoints return operational status and MARRY BASE platform identity", async () => {
+test("health and readiness endpoints return operational status and MARI BASE platform identity", async () => {
   const app = await buildApp();
   try {
     const healthRes = await app.inject({ method: "GET", url: "/health" });
@@ -42,7 +42,7 @@ test("health and readiness endpoints return operational status and MARRY BASE pl
     });
     assert.equal(platformRes.statusCode, 200);
     const platformBody = platformRes.json();
-    assert.equal(platformBody.name, "MARRY BASE");
+    assert.equal(platformBody.name, "MARI BASE");
     assert.ok(
       ["operational", "degraded"].includes(platformBody.status),
       `Unexpected platform overall status: ${platformBody.status}`
@@ -85,13 +85,13 @@ test("health and readiness endpoints return operational status and MARRY BASE pl
   }
 });
 
-test("dashboard routes serve MARRY BASE management interface, logo, and assets", async () => {
+test("dashboard routes serve MARI BASE management interface, logo, and assets", async () => {
   const app = await buildApp();
   try {
     const indexRes = await app.inject({ method: "GET", url: "/" });
     assert.equal(indexRes.statusCode, 200);
     assert.match(indexRes.headers["content-type"] ?? "", /text\/html/);
-    assert.match(indexRes.body, /MARRY BASE/);
+    assert.match(indexRes.body, /MARI BASE/);
     assert.match(indexRes.body, /id="app-shell"/);
     assert.match(indexRes.body, /type="module" src="\/dashboard\/app\.js"/);
     assert.doesNotMatch(indexRes.body, /\sonclick=/);
@@ -147,7 +147,7 @@ test("dashboard routes serve MARRY BASE management interface, logo, and assets",
     });
     assert.equal(logoSvgRes.statusCode, 200);
     assert.match(logoSvgRes.headers["content-type"] ?? "", /image\/svg\+xml/);
-    assert.match(logoSvgRes.body, /MARRY BASE/);
+    assert.match(logoSvgRes.body, /MARI BASE/);
 
     const appIconRes = await app.inject({ method: "GET", url: "/v1/platform/app-icon" });
     assert.equal(appIconRes.statusCode, 200);
@@ -239,7 +239,7 @@ test("Android APK endpoints enforce authentication, input validation, and truthf
 
     const mobileHtmlRes = await app.inject({ method: "GET", url: "/mobile/" });
     assert.equal(mobileHtmlRes.statusCode, 200);
-    assert.match(mobileHtmlRes.body, /MARRY BASE/);
+    assert.match(mobileHtmlRes.body, /MARI BASE/);
   } finally {
     await app.close();
   }
@@ -258,7 +258,7 @@ test("mobile client source is CSP-friendly, branded, and keeps server data out o
   assert.doesNotMatch(html, /\sonclick=|\sstyle=/i);
   assert.match(html, /src="\.\/config\.js"/);
   assert.match(html, /src="\.\/app\.js"/);
-  assert.match(html, /MARRY BASE server URL/);
+  assert.match(html, /MARI BASE server URL/);
   assert.match(script, /localStorage/);
   assert.match(script, /endpoint\("\/ready"\)/);
   assert.match(script, /payload\.status !== "ready"/);
