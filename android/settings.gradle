@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "MarryBase"
+rootProject.name = "MariBase"
 include(":app")
