@@ -8,6 +8,7 @@ import { ValidationError } from "../lib/errors.js";
 import { requirePlatformUser } from "../middleware/auth.middleware.js";
 import {
   buildMarryBaseApk,
+  getBuiltProjectApk,
   getOrBuildDefaultApk,
 } from "../services/apk.service.js";
 import { listAuditEvents } from "../services/audit.service.js";
@@ -144,16 +145,15 @@ export async function registerPlatformRoutes(
   app.get("/v1/platform/apk/download", async (request, reply) => {
     const q = (request.query ?? {}) as { projectSlug?: string };
     if (q.projectSlug) {
-      const info = await buildMarryBaseApk({ projectSlug: q.projectSlug });
-      const buf = await readFile(info.filePath);
+      const artifact = await getBuiltProjectApk(q.projectSlug);
       return reply
         .header("content-type", "application/vnd.android.package-archive")
         .header(
           "content-disposition",
-          `attachment; filename="${info.fileName}"`
+          `attachment; filename="${artifact.fileName}"`
         )
-        .header("x-apk-sha256", info.checksumSha256)
-        .send(buf);
+        .header("x-apk-sha256", artifact.checksumSha256)
+        .send(artifact.buffer);
     }
     const { info, buffer } = await getOrBuildDefaultApk();
     return reply

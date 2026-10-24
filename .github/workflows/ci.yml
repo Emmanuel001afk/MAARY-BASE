@@ -28,6 +28,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Validate Management Studio modules
+        run: npm run check:studio
+
+      - name: Validate mobile client modules
+        run: npm run check:mobile
+
       - name: Build production bundle & Android APK
         run: npm run build
 

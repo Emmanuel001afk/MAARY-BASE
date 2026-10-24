@@ -6,6 +6,7 @@ import {
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { deflateRawSync } from "node:zlib";
+import { NotFoundError, ValidationError } from "../lib/errors.js";
 import { recordAuditEvent } from "./audit.service.js";
 
 export interface BuiltApkInfo {
@@ -314,7 +315,7 @@ export function buildAndroidBinaryManifest(
     makeStartElement(11, "application", [
       attrString(NS_ANDROID, "label", "MARRY BASE"),
       attrRef(NS_ANDROID, "icon", 0x7f010000), // @mipmap/ic_launcher
-      attrBool(NS_ANDROID, "allowBackup", true),
+      attrBool(NS_ANDROID, "allowBackup", false),
       attrBool(NS_ANDROID, "usesCleartextTraffic", true),
     ]),
     makeStartElement(16, "activity", [
@@ -464,367 +465,439 @@ function encodeUleb128(value: number): Buffer {
  * Compiles a complete, executable Dalvik Bytecode (classes.dex, format 035) file
  * defining `com.marrybase.platform.MainActivity extends android.app.Activity` with:
  *   - `public <init>()V` (calls `super.<init>()`)
- *   - `protected onCreate(Landroid/os/Bundle;)V` (calls `super.onCreate(Bundle)`,
- *     instantiates `android.webkit.WebView`, calls `loadUrl("file:///android_asset/www/index.html")`,
- *     and calls `setContentView(WebView)`).
+ *   - `protected onCreate(Landroid/os/Bundle;)V` configures the local mobile hub,
+ *     WebSettings, WebView/Chrome clients, system colors, and remote Studio navigation.
+ *   - `public onBackPressed()V` traverses WebView history before leaving the activity.
+ *   - A private WebView field retains the active navigation state.
  */
 export function buildClassesDex(packageName: string): Buffer {
   const pkgPath = packageName.replace(/\./g, "/");
   const activityDescriptor = `L${pkgPath}/MainActivity;`;
+  const activityType = "Landroid/app/Activity;";
+  const webViewType = "Landroid/webkit/WebView;";
+  const settingsType = "Landroid/webkit/WebSettings;";
+  const webViewClientType = "Landroid/webkit/WebViewClient;";
+  const webChromeClientType = "Landroid/webkit/WebChromeClient;";
+  const windowType = "Landroid/view/Window;";
+  const sourceFile = "MainActivity.java";
+  const startUrl = "file:///android_asset/www/index.html";
 
-  // DEX requires string_ids to be strictly sorted lexicographically!
-  const rawStrings = [
-    "<init>",
-    "L",
-    "Landroid/app/Activity;",
-    "Landroid/content/Context;",
-    "Landroid/os/Bundle;",
-    "Landroid/view/View;",
-    "Landroid/webkit/WebView;",
-    activityDescriptor,
-    "Ljava/lang/String;",
-    "MainActivity.java",
-    "V",
-    "VL",
-    "file:///android_asset/www/index.html",
-    "loadUrl",
-    "onCreate",
-    "setContentView",
-  ].sort();
+  interface DexProto {
+    shorty: string;
+    returnType: string;
+    params: string[];
+    protoIdx?: number;
+    parametersOff?: number;
+  }
+  interface DexMethod {
+    cls: string;
+    name: string;
+    proto: DexProto;
+    protoIdx?: number;
+  }
 
-  const strIdx = (s: string): number => {
-    const i = rawStrings.indexOf(s);
-    if (i === -1) throw new Error(`DEX string not found: ${s}`);
-    return i;
-  };
-
-  // Type descriptors sorted by their string_id index
-  const typeDescriptors = [
-    "Landroid/app/Activity;",
-    "Landroid/content/Context;",
-    "Landroid/os/Bundle;",
-    "Landroid/view/View;",
-    "Landroid/webkit/WebView;",
-    activityDescriptor,
-    "Ljava/lang/String;",
-    "V",
-  ].sort((a, b) => strIdx(a) - strIdx(b));
-
-  const typeIdx = (t: string): number => {
-    const i = typeDescriptors.indexOf(t);
-    if (i === -1) throw new Error(`DEX type not found: ${t}`);
-    return i;
-  };
-
-  // Prototypes:
-  // 0: ()V
-  // 1: (Landroid/content/Context;)V
-  // 2: (Landroid/os/Bundle;)V
-  // 3: (Landroid/view/View;)V
-  // 4: (Ljava/lang/String;)V
-  const protos = [
-    { shorty: "V", returnType: "V", params: [] as string[] },
-    {
-      shorty: "VL",
-      returnType: "V",
-      params: ["Landroid/content/Context;"],
-    },
-    { shorty: "VL", returnType: "V", params: ["Landroid/os/Bundle;"] },
-    { shorty: "VL", returnType: "V", params: ["Landroid/view/View;"] },
-    { shorty: "VL", returnType: "V", params: ["Ljava/lang/String;"] },
-  ];
-
-  // Methods sorted by (class_idx, name_idx, proto_idx)
-  const rawMethods = [
-    {
-      cls: "Landroid/app/Activity;",
-      name: "<init>",
-      protoIdx: 0,
-    },
-    {
-      cls: "Landroid/app/Activity;",
-      name: "onCreate",
-      protoIdx: 2,
-    },
-    {
-      cls: "Landroid/app/Activity;",
-      name: "setContentView",
-      protoIdx: 3,
-    },
-    {
-      cls: "Landroid/webkit/WebView;",
-      name: "<init>",
-      protoIdx: 1,
-    },
-    {
-      cls: "Landroid/webkit/WebView;",
-      name: "loadUrl",
-      protoIdx: 4,
-    },
-    {
-      cls: activityDescriptor,
-      name: "<init>",
-      protoIdx: 0,
-    },
-    {
-      cls: activityDescriptor,
-      name: "onCreate",
-      protoIdx: 2,
-    },
-  ].sort((a, b) => {
-    const cDiff = typeIdx(a.cls) - typeIdx(b.cls);
-    if (cDiff !== 0) return cDiff;
-    const nDiff = strIdx(a.name) - strIdx(b.name);
-    if (nDiff !== 0) return nDiff;
-    return a.protoIdx - b.protoIdx;
+  const shortyFor = (type: string): string =>
+    type.startsWith("L") || type.startsWith("[") ? "L" : type;
+  const makeProto = (returnType: string, params: string[] = []): DexProto => ({
+    shorty: [returnType, ...params].map(shortyFor).join(""),
+    returnType,
+    params,
   });
 
-  const methodIdx = (cls: string, name: string, protoIndex: number): number => {
-    const i = rawMethods.findIndex(
-      (m) => m.cls === cls && m.name === name && m.protoIdx === protoIndex
-    );
-    if (i === -1) throw new Error(`DEX method not found: ${cls}->${name}`);
-    return i;
+  const pVoid = makeProto("V");
+  const pContext = makeProto("V", ["Landroid/content/Context;"]);
+  const pBundle = makeProto("V", ["Landroid/os/Bundle;"]);
+  const pView = makeProto("V", ["Landroid/view/View;"]);
+  const pString = makeProto("V", ["Ljava/lang/String;"]);
+  const pBoolean = makeProto("V", ["Z"]);
+  const pInt = makeProto("V", ["I"]);
+  const pWebViewClient = makeProto("V", [webViewClientType]);
+  const pWebChromeClient = makeProto("V", [webChromeClientType]);
+  const pSettings = makeProto(settingsType);
+  const pWindow = makeProto(windowType);
+  const pBooleanResult = makeProto("Z");
+  const protos = [
+    pVoid,
+    pContext,
+    pBundle,
+    pView,
+    pString,
+    pBoolean,
+    pInt,
+    pWebViewClient,
+    pWebChromeClient,
+    pSettings,
+    pWindow,
+    pBooleanResult,
+  ];
+
+  const rawMethods: DexMethod[] = [
+    { cls: activityType, name: "<init>", proto: pVoid },
+    { cls: activityType, name: "onCreate", proto: pBundle },
+    { cls: activityType, name: "onBackPressed", proto: pVoid },
+    { cls: activityType, name: "setContentView", proto: pView },
+    { cls: activityType, name: "getWindow", proto: pWindow },
+    { cls: webViewType, name: "<init>", proto: pContext },
+    { cls: webViewType, name: "loadUrl", proto: pString },
+    { cls: webViewType, name: "getSettings", proto: pSettings },
+    { cls: webViewType, name: "setWebViewClient", proto: pWebViewClient },
+    { cls: webViewType, name: "setWebChromeClient", proto: pWebChromeClient },
+    { cls: webViewType, name: "setBackgroundColor", proto: pInt },
+    { cls: webViewType, name: "canGoBack", proto: pBooleanResult },
+    { cls: webViewType, name: "goBack", proto: pVoid },
+    { cls: settingsType, name: "setJavaScriptEnabled", proto: pBoolean },
+    { cls: settingsType, name: "setDomStorageEnabled", proto: pBoolean },
+    { cls: settingsType, name: "setAllowFileAccess", proto: pBoolean },
+    { cls: settingsType, name: "setAllowContentAccess", proto: pBoolean },
+    { cls: settingsType, name: "setAllowFileAccessFromFileURLs", proto: pBoolean },
+    { cls: settingsType, name: "setAllowUniversalAccessFromFileURLs", proto: pBoolean },
+    { cls: settingsType, name: "setLoadWithOverviewMode", proto: pBoolean },
+    { cls: settingsType, name: "setUseWideViewPort", proto: pBoolean },
+    { cls: settingsType, name: "setMediaPlaybackRequiresUserGesture", proto: pBoolean },
+    { cls: settingsType, name: "setBuiltInZoomControls", proto: pBoolean },
+    { cls: settingsType, name: "setDisplayZoomControls", proto: pBoolean },
+    { cls: webViewClientType, name: "<init>", proto: pVoid },
+    { cls: webChromeClientType, name: "<init>", proto: pVoid },
+    { cls: windowType, name: "setStatusBarColor", proto: pInt },
+    { cls: windowType, name: "setNavigationBarColor", proto: pInt },
+    { cls: activityDescriptor, name: "<init>", proto: pVoid },
+    { cls: activityDescriptor, name: "onCreate", proto: pBundle },
+    { cls: activityDescriptor, name: "onBackPressed", proto: pVoid },
+  ];
+
+  const typeDescriptors = Array.from(new Set([
+    activityDescriptor,
+    activityType,
+    webViewType,
+    settingsType,
+    webViewClientType,
+    webChromeClientType,
+    windowType,
+    "Landroid/content/Context;",
+    "Landroid/os/Bundle;",
+    "Landroid/view/View;",
+    "Ljava/lang/String;",
+    "V",
+    "Z",
+    "I",
+  ]));
+  const rawStrings = Array.from(new Set([
+    ...typeDescriptors,
+    ...protos.map((proto) => proto.shorty),
+    ...rawMethods.map((method) => method.name),
+    "webView",
+    sourceFile,
+    startUrl,
+  ])).sort();
+  const strIdx = (value: string): number => {
+    const index = rawStrings.indexOf(value);
+    if (index === -1) throw new Error(`DEX string not found: ${value}`);
+    return index;
   };
 
-  // Layout offsets (all 4-byte aligned):
-  // 0x0000: header_item (112 bytes = 0x70)
-  // 0x0070: string_id_item (16 * 4 = 64 bytes = 0x40)
-  // 0x00b0: type_id_item (8 * 4 = 32 bytes = 0x20)
-  // 0x00d0: proto_id_item (5 * 12 = 60 bytes = 0x3c)
-  // 0x010c: method_id_item (7 * 8 = 56 bytes = 0x38)
-  // 0x0144: class_def_item (1 * 32 = 32 bytes = 0x20)
-  // 0x0164: type_list section (4 type_lists * 8 bytes = 32 bytes = 0x20)
-  // 0x0184: code_item #1 (<init>) + code_item #2 (onCreate)
+  // DEX type_ids are ordered by string_id; proto_ids by return type and parameters.
+  typeDescriptors.sort((a, b) => strIdx(a) - strIdx(b));
+  const typeIdx = (value: string): number => {
+    const index = typeDescriptors.indexOf(value);
+    if (index === -1) throw new Error(`DEX type not found: ${value}`);
+    return index;
+  };
+  protos.sort((a, b) => {
+    const returnDiff = typeIdx(a.returnType) - typeIdx(b.returnType);
+    if (returnDiff !== 0) return returnDiff;
+    const lengthDiff = a.params.length - b.params.length;
+    if (lengthDiff !== 0) return lengthDiff;
+    for (let index = 0; index < a.params.length; index += 1) {
+      const diff = typeIdx(a.params[index]!) - typeIdx(b.params[index]!);
+      if (diff !== 0) return diff;
+    }
+    return 0;
+  });
+  protos.forEach((proto, index) => { proto.protoIdx = index; });
+  rawMethods.forEach((method) => { method.protoIdx = method.proto.protoIdx; });
+  rawMethods.sort((a, b) => {
+    const classDiff = typeIdx(a.cls) - typeIdx(b.cls);
+    if (classDiff !== 0) return classDiff;
+    const nameDiff = strIdx(a.name) - strIdx(b.name);
+    if (nameDiff !== 0) return nameDiff;
+    return a.protoIdx! - b.protoIdx!;
+  });
+  const methodIdx = (cls: string, name: string, proto: DexProto): number => {
+    const index = rawMethods.findIndex((method) =>
+      method.cls === cls && method.name === name && method.proto === proto
+    );
+    if (index === -1) throw new Error(`DEX method not found: ${cls}->${name}`);
+    return index;
+  };
+
+  // One private WebView field retains navigation state for the Android back button.
+  const fieldName = "webView";
+  const fieldIdx = 0;
   const headerOff = 0;
   const stringIdsOff = 0x70;
-  const typeIdsOff = stringIdsOff + rawStrings.length * 4; // 0xb0
-  const protoIdsOff = typeIdsOff + typeDescriptors.length * 4; // 0xd0
-  const methodIdsOff = protoIdsOff + protos.length * 12; // 0x10c
-  const classDefsOff = methodIdsOff + rawMethods.length * 8; // 0x144
-  const dataOff = classDefsOff + 32; // 0x164
+  const typeIdsOff = stringIdsOff + rawStrings.length * 4;
+  const protoIdsOff = typeIdsOff + typeDescriptors.length * 4;
+  const fieldIdsOff = protoIdsOff + protos.length * 12;
+  const methodIdsOff = fieldIdsOff + 8;
+  const classDefsOff = methodIdsOff + rawMethods.length * 8;
+  const dataOff = classDefsOff + 32;
 
-  // Build type_list items for protos 1..4 (each has 1 parameter: 4-byte size=1 + 2-byte typeIdx + 2-byte pad = 8 bytes)
+  const invoke = (opcode: number, methodIndex: number, registers: number[]): number[] => [
+    opcode | (registers.length << 12) | ((registers[4] ?? 0) << 8),
+    methodIndex,
+    (registers[0] ?? 0) | ((registers[1] ?? 0) << 4) |
+      ((registers[2] ?? 0) << 8) | ((registers[3] ?? 0) << 12),
+  ];
+  const invokeVirtual = (cls: string, name: string, proto: DexProto, registers: number[]): number[] =>
+    invoke(0x6e, methodIdx(cls, name, proto), registers);
+  const newInstance = (register: number, type: string): number[] => [0x22 | (register << 8), typeIdx(type)];
+  const constString = (register: number, value: string): number[] => [0x1a | (register << 8), strIdx(value)];
+  const const4 = (register: number, literal: number): number[] => [0x12 | (register << 8) | ((literal & 0xf) << 12)];
+  const const32 = (register: number, literal: number): number[] => [
+    0x14 | (register << 8), literal & 0xffff, (literal >>> 16) & 0xffff,
+  ];
+  const moveResult = (register: number, object = false): number[] => [(object ? 0x0c : 0x0a) | (register << 8)];
+  const fieldAccess = (opcode: number, a: number, b: number): number[] => [
+    opcode | (a << 8) | (b << 12), fieldIdx,
+  ];
+  const ifEqz = (register: number, offset: number): number[] => [0x38 | (register << 8), offset & 0xffff];
+  const returnVoid = 0x000e;
+
+  // <init>()V — invoke the android.app.Activity constructor.
+  const initUnits = [
+    ...invoke(0x70, methodIdx(activityType, "<init>", pVoid), [0]),
+    returnVoid,
+  ];
+
+  // onCreate(Bundle) — configure a real local/remote WebView client.
+  // v0=WebView, v1=WebSettings, v2=temporary object/Window, v3=color,
+  // v4=p0(Activity), v5=p1(Bundle).
+  const createUnits: number[] = [
+    ...invoke(0x6f, methodIdx(activityType, "onCreate", pBundle), [4, 5]),
+    ...newInstance(0, webViewType),
+    ...invoke(0x70, methodIdx(webViewType, "<init>", pContext), [0, 4]),
+    ...fieldAccess(0x5b, 0, 4), // iput-object v0, v4, webView
+    ...invokeVirtual(webViewType, "getSettings", pSettings, [0]),
+    ...moveResult(1, true),
+    ...const4(2, 1),
+  ];
+  for (const setting of [
+    "setJavaScriptEnabled",
+    "setDomStorageEnabled",
+    "setAllowFileAccess",
+    "setAllowContentAccess",
+    "setAllowFileAccessFromFileURLs",
+    "setAllowUniversalAccessFromFileURLs",
+    "setLoadWithOverviewMode",
+    "setUseWideViewPort",
+    "setMediaPlaybackRequiresUserGesture",
+  ]) {
+    createUnits.push(...invokeVirtual(settingsType, setting, pBoolean, [1, 2]));
+  }
+  createUnits.push(...const4(2, 0));
+  for (const setting of ["setBuiltInZoomControls", "setDisplayZoomControls"]) {
+    createUnits.push(...invokeVirtual(settingsType, setting, pBoolean, [1, 2]));
+  }
+  createUnits.push(
+    ...newInstance(2, webViewClientType),
+    ...invoke(0x70, methodIdx(webViewClientType, "<init>", pVoid), [2]),
+    ...invokeVirtual(webViewType, "setWebViewClient", pWebViewClient, [0, 2]),
+    ...newInstance(2, webChromeClientType),
+    ...invoke(0x70, methodIdx(webChromeClientType, "<init>", pVoid), [2]),
+    ...invokeVirtual(webViewType, "setWebChromeClient", pWebChromeClient, [0, 2]),
+    ...const32(3, 0xff0b141b),
+    ...invokeVirtual(webViewType, "setBackgroundColor", pInt, [0, 3]),
+    ...constString(2, startUrl),
+    ...invokeVirtual(webViewType, "loadUrl", pString, [0, 2]),
+    ...invokeVirtual(activityType, "setContentView", pView, [4, 0]),
+    ...invokeVirtual(activityType, "getWindow", pWindow, [4]),
+    ...moveResult(2, true),
+    ...invokeVirtual(windowType, "setStatusBarColor", pInt, [2, 3]),
+    ...invokeVirtual(activityType, "getWindow", pWindow, [4]),
+    ...moveResult(2, true),
+    ...invokeVirtual(windowType, "setNavigationBarColor", pInt, [2, 3]),
+    returnVoid,
+  );
+
+  // onBackPressed()V — navigate WebView history before falling back to Activity.
+  const backUnits: number[] = [
+    ...fieldAccess(0x54, 0, 2), // 0: iget-object v0, v2(p0), webView
+    ...ifEqz(0, 12),           // 2: branch to super at instruction 14
+    ...invokeVirtual(webViewType, "canGoBack", pBooleanResult, [0]), // 4
+    ...moveResult(1),          // 7
+    ...ifEqz(1, 6),            // 8: branch to super at instruction 14
+    ...invokeVirtual(webViewType, "goBack", pVoid, [0]), // 10
+    returnVoid,                // 13
+    ...invoke(0x6f, methodIdx(activityType, "onBackPressed", pVoid), [2]), // 14
+    returnVoid,                // 17
+  ];
+
+  const buildCodeItem = (registers: number, inputs: number, outputs: number, units: number[]): Buffer => {
+    const buffer = Buffer.alloc(16 + (units.length + (units.length % 2)) * 2);
+    buffer.writeUInt16LE(registers, 0);
+    buffer.writeUInt16LE(inputs, 2);
+    buffer.writeUInt16LE(outputs, 4);
+    buffer.writeUInt16LE(0, 6);
+    buffer.writeUInt32LE(0, 8);
+    buffer.writeUInt32LE(units.length, 12);
+    units.forEach((unit, index) => buffer.writeUInt16LE(unit & 0xffff, 16 + index * 2));
+    return buffer;
+  };
+  const codeItems = [
+    buildCodeItem(1, 1, 1, initUnits),
+    buildCodeItem(6, 2, 2, createUnits),
+    buildCodeItem(3, 1, 1, backUnits),
+  ];
+
+  // Data section: parameter type_lists, code_items, strings, class_data, map_list.
   const typeListsOff = dataOff;
-  const typeListsBuf = Buffer.alloc(4 * 8);
-  for (let i = 0; i < 4; i++) {
-    const paramType = protos[i + 1]!.params[0]!;
-    typeListsBuf.writeUInt32LE(1, i * 8);
-    typeListsBuf.writeUInt16LE(typeIdx(paramType), i * 8 + 4);
-    typeListsBuf.writeUInt16LE(0, i * 8 + 6);
+  const typeListChunks: Buffer[] = [];
+  let cursor = typeListsOff;
+  for (const proto of protos) {
+    if (proto.params.length === 0) continue;
+    const size = 4 + proto.params.length * 2;
+    const paddedSize = size + ((4 - (size % 4)) % 4);
+    const buffer = Buffer.alloc(paddedSize);
+    buffer.writeUInt32LE(proto.params.length, 0);
+    proto.params.forEach((param, index) => buffer.writeUInt16LE(typeIdx(param), 4 + index * 2));
+    proto.parametersOff = cursor;
+    typeListChunks.push(buffer);
+    cursor += buffer.length;
+  }
+  const typeListsRaw = Buffer.concat(typeListChunks);
+  const codeOffsets: number[] = [];
+  for (const code of codeItems) {
+    codeOffsets.push(cursor);
+    cursor += code.length;
   }
 
-  // Build code_item #1: MainActivity.<init>()V
-  // registers_size = 1 (p0 = v0), ins_size = 1, outs_size = 1, tries_size = 0
-  // insns:
-  //   70 10 <Activity.<init>> 00 00  (invoke-direct {v0}, Landroid/app/Activity;-><init>()V)
-  //   0e 00                          (return-void)
-  const code1Off = typeListsOff + typeListsBuf.length; // 0x184
-  const actInitIdx = methodIdx("Landroid/app/Activity;", "<init>", 0);
-  const code1Buf = Buffer.alloc(24);
-  code1Buf.writeUInt16LE(1, 0); // registers_size
-  code1Buf.writeUInt16LE(1, 2); // ins_size
-  code1Buf.writeUInt16LE(1, 4); // outs_size
-  code1Buf.writeUInt16LE(0, 6); // tries_size
-  code1Buf.writeUInt32LE(0, 8); // debug_info_off
-  code1Buf.writeUInt32LE(4, 12); // insns_size (4 16-bit code units = 8 bytes)
-  code1Buf.writeUInt16LE(0x1070, 16); // invoke-direct {v0}
-  code1Buf.writeUInt16LE(actInitIdx, 18);
-  code1Buf.writeUInt16LE(0x0000, 20); // v0
-  code1Buf.writeUInt16LE(0x000e, 22); // return-void
-
-  // Build code_item #2: MainActivity.onCreate(Landroid/os/Bundle;)V
-  // registers_size = 4 (v0, v1, p0=v2, p1=v3), ins_size = 2, outs_size = 2, tries_size = 0
-  // insns (13 code units = 26 bytes, padded to 28 bytes):
-  //   6f 20 <Activity.onCreate> 32 00      (invoke-super {v2, v3}, Landroid/app/Activity;->onCreate(Landroid/os/Bundle;)V)
-  //   22 00 <WebView typeIdx>              (new-instance v0, Landroid/webkit/WebView;)
-  //   70 20 <WebView.<init>> 20 00         (invoke-direct {v0, v2}, Landroid/webkit/WebView;-><init>(Landroid/content/Context;)V)
-  //   1a 01 <url strIdx>                   (const-string v1, "file:///android_asset/www/index.html")
-  //   6e 20 <WebView.loadUrl> 10 00        (invoke-virtual {v0, v1}, Landroid/webkit/WebView;->loadUrl(Ljava/lang/String;)V)
-  //   6e 20 <Activity.setContentView> 02 00 (invoke-virtual {v2, v0}, Landroid/app/Activity;->setContentView(Landroid/view/View;)V)
-  //   0e 00                                (return-void)
-  const code2Off = code1Off + code1Buf.length; // 0x19c
-  const actOnCreateIdx = methodIdx("Landroid/app/Activity;", "onCreate", 2);
-  const actSetContentIdx = methodIdx(
-    "Landroid/app/Activity;",
-    "setContentView",
-    3
-  );
-  const wvTypeIdx = typeIdx("Landroid/webkit/WebView;");
-  const wvInitIdx = methodIdx("Landroid/webkit/WebView;", "<init>", 1);
-  const wvLoadUrlIdx = methodIdx("Landroid/webkit/WebView;", "loadUrl", 4);
-  const urlStrIdx = strIdx("file:///android_asset/www/index.html");
-
-  // 16-byte code_item header + 17 16-bit code units (34 bytes) + 2-byte pad = 52 bytes
-  const code2Fixed = Buffer.alloc(52);
-  code2Fixed.writeUInt16LE(4, 0); // registers_size = 4
-  code2Fixed.writeUInt16LE(2, 2); // ins_size = 2 (this=v2, bundle=v3)
-  code2Fixed.writeUInt16LE(2, 4); // outs_size = 2
-  code2Fixed.writeUInt16LE(0, 6); // tries_size = 0
-  code2Fixed.writeUInt32LE(0, 8); // debug_info_off = 0
-  code2Fixed.writeUInt32LE(17, 12); // 17 code units (34 bytes)
-  code2Fixed.writeUInt16LE(0x206f, 16);
-  code2Fixed.writeUInt16LE(actOnCreateIdx, 18);
-  code2Fixed.writeUInt16LE(0x0032, 20);
-  code2Fixed.writeUInt16LE(0x0022, 22);
-  code2Fixed.writeUInt16LE(wvTypeIdx, 24);
-  code2Fixed.writeUInt16LE(0x2070, 26);
-  code2Fixed.writeUInt16LE(wvInitIdx, 28);
-  code2Fixed.writeUInt16LE(0x0020, 30);
-  code2Fixed.writeUInt16LE(0x011a, 32);
-  code2Fixed.writeUInt16LE(urlStrIdx, 34);
-  code2Fixed.writeUInt16LE(0x206e, 36);
-  code2Fixed.writeUInt16LE(wvLoadUrlIdx, 38);
-  code2Fixed.writeUInt16LE(0x0010, 40);
-  code2Fixed.writeUInt16LE(0x206e, 42);
-  code2Fixed.writeUInt16LE(actSetContentIdx, 44);
-  code2Fixed.writeUInt16LE(0x0002, 46);
-  code2Fixed.writeUInt16LE(0x000e, 48);
-
-  // Build string_data_item section
-  const stringDataStartOff = code2Off + code2Fixed.length;
+  const stringDataStartOff = cursor;
   const stringDataOffsets: number[] = [];
   const stringDataChunks: Buffer[] = [];
-  let curStrOff = stringDataStartOff;
-  for (const s of rawStrings) {
-    stringDataOffsets.push(curStrOff);
-    const utf8 = Buffer.from(s, "utf8");
-    const lenPrefix = encodeUleb128(s.length);
-    const chunk = Buffer.concat([lenPrefix, utf8, Buffer.from([0x00])]);
+  for (const value of rawStrings) {
+    stringDataOffsets.push(cursor);
+    const chunk = Buffer.concat([
+      encodeUleb128(value.length),
+      Buffer.from(value, "utf8"),
+      Buffer.from([0]),
+    ]);
     stringDataChunks.push(chunk);
-    curStrOff += chunk.length;
+    cursor += chunk.length;
   }
   const stringDataRaw = Buffer.concat(stringDataChunks);
-
-  // Build class_data_item for MainActivity
-  const classDataOff = stringDataStartOff + stringDataRaw.length;
-  const mainInitIdx = methodIdx(activityDescriptor, "<init>", 0);
-  const mainOnCreateIdx = methodIdx(activityDescriptor, "onCreate", 2);
+  const classDataOff = cursor;
+  const directMethods = [
+    { index: methodIdx(activityDescriptor, "<init>", pVoid), access: 0x10001, codeOff: codeOffsets[0]! },
+  ];
+  const virtualMethods = [
+    { index: methodIdx(activityDescriptor, "onCreate", pBundle), access: 0x0004, codeOff: codeOffsets[1]! },
+    { index: methodIdx(activityDescriptor, "onBackPressed", pVoid), access: 0x0001, codeOff: codeOffsets[2]! },
+  ].sort((a, b) => a.index - b.index);
+  const encodedMethods = (methods: Array<{ index: number; access: number; codeOff: number }>): Buffer[] => {
+    const chunks: Buffer[] = [];
+    let previous = 0;
+    for (const method of methods) {
+      chunks.push(
+        encodeUleb128(method.index - previous),
+        encodeUleb128(method.access),
+        encodeUleb128(method.codeOff),
+      );
+      previous = method.index;
+    }
+    return chunks;
+  };
   const classDataRaw = Buffer.concat([
-    encodeUleb128(0), // static_fields_size = 0
-    encodeUleb128(0), // instance_fields_size = 0
-    encodeUleb128(1), // direct_methods_size = 1 (<init>)
-    encodeUleb128(1), // virtual_methods_size = 1 (onCreate)
-    // direct_method[0]: <init>
-    encodeUleb128(mainInitIdx),
-    encodeUleb128(0x10001), // ACC_PUBLIC | ACC_CONSTRUCTOR
-    encodeUleb128(code1Off),
-    // virtual_method[0]: onCreate
-    encodeUleb128(mainOnCreateIdx),
-    encodeUleb128(0x0004), // ACC_PROTECTED
-    encodeUleb128(code2Off),
+    encodeUleb128(0),
+    encodeUleb128(1),
+    encodeUleb128(directMethods.length),
+    encodeUleb128(virtualMethods.length),
+    encodeUleb128(fieldIdx),
+    encodeUleb128(0x0002), // ACC_PRIVATE
+    ...encodedMethods(directMethods),
+    ...encodedMethods(virtualMethods),
   ]);
+  cursor += classDataRaw.length;
+  const mapOff = cursor + ((4 - (cursor % 4)) % 4);
 
-  const preMapEnd = classDataOff + classDataRaw.length;
-  const preMapPad = (4 - (preMapEnd % 4)) % 4;
-  const mapOff = preMapEnd + preMapPad;
-
-  // Build map_list (11 items: 4-byte size + 11 * 12 = 136 bytes)
   const mapItems = [
-    { type: 0x0000, size: 1, offset: headerOff }, // TYPE_HEADER_ITEM
-    { type: 0x0001, size: rawStrings.length, offset: stringIdsOff }, // TYPE_STRING_ID_ITEM
-    { type: 0x0002, size: typeDescriptors.length, offset: typeIdsOff }, // TYPE_TYPE_ID_ITEM
-    { type: 0x0003, size: protos.length, offset: protoIdsOff }, // TYPE_PROTO_ID_ITEM
-    { type: 0x0005, size: rawMethods.length, offset: methodIdsOff }, // TYPE_METHOD_ID_ITEM
-    { type: 0x0006, size: 1, offset: classDefsOff }, // TYPE_CLASS_DEF_ITEM
-    { type: 0x1001, size: 4, offset: typeListsOff }, // TYPE_TYPE_LIST
-    { type: 0x2001, size: 2, offset: code1Off }, // TYPE_CODE_ITEM
-    { type: 0x2002, size: rawStrings.length, offset: stringDataStartOff }, // TYPE_STRING_DATA_ITEM
-    { type: 0x2000, size: 1, offset: classDataOff }, // TYPE_CLASS_DATA_ITEM
-    { type: 0x1000, size: 1, offset: mapOff }, // TYPE_MAP_LIST
+    { type: 0x0000, size: 1, offset: headerOff },
+    { type: 0x0001, size: rawStrings.length, offset: stringIdsOff },
+    { type: 0x0002, size: typeDescriptors.length, offset: typeIdsOff },
+    { type: 0x0003, size: protos.length, offset: protoIdsOff },
+    { type: 0x0004, size: 1, offset: fieldIdsOff },
+    { type: 0x0005, size: rawMethods.length, offset: methodIdsOff },
+    { type: 0x0006, size: 1, offset: classDefsOff },
+    { type: 0x1001, size: typeListChunks.length, offset: typeListsOff },
+    { type: 0x2001, size: codeItems.length, offset: codeOffsets[0]! },
+    { type: 0x2002, size: rawStrings.length, offset: stringDataStartOff },
+    { type: 0x2000, size: 1, offset: classDataOff },
+    { type: 0x1000, size: 1, offset: mapOff },
   ];
   const mapBuf = Buffer.alloc(4 + mapItems.length * 12);
   mapBuf.writeUInt32LE(mapItems.length, 0);
-  for (let i = 0; i < mapItems.length; i++) {
-    const m = mapItems[i]!;
-    const off = 4 + i * 12;
-    mapBuf.writeUInt16LE(m.type, off);
-    mapBuf.writeUInt16LE(0, off + 2);
-    mapBuf.writeUInt32LE(m.size, off + 4);
-    mapBuf.writeUInt32LE(m.offset, off + 8);
-  }
+  mapItems.forEach((item, index) => {
+    const offset = 4 + index * 12;
+    mapBuf.writeUInt16LE(item.type, offset);
+    mapBuf.writeUInt32LE(item.size, offset + 4);
+    mapBuf.writeUInt32LE(item.offset, offset + 8);
+  });
 
   const fileSize = mapOff + mapBuf.length;
   const dex = Buffer.alloc(fileSize);
-
-  // 1. Write string_id_items
-  for (let i = 0; i < stringDataOffsets.length; i++) {
-    dex.writeUInt32LE(stringDataOffsets[i]!, stringIdsOff + i * 4);
-  }
-
-  // 2. Write type_id_items
-  for (let i = 0; i < typeDescriptors.length; i++) {
-    dex.writeUInt32LE(strIdx(typeDescriptors[i]!), typeIdsOff + i * 4);
-  }
-
-  // 3. Write proto_id_items
-  for (let i = 0; i < protos.length; i++) {
-    const p = protos[i]!;
-    const off = protoIdsOff + i * 12;
-    dex.writeUInt32LE(strIdx(p.shorty), off);
-    dex.writeUInt32LE(typeIdx(p.returnType), off + 4);
-    dex.writeUInt32LE(
-      p.params.length > 0 ? typeListsOff + (i - 1) * 8 : 0,
-      off + 8
-    );
-  }
-
-  // 4. Write method_id_items
-  for (let i = 0; i < rawMethods.length; i++) {
-    const m = rawMethods[i]!;
-    const off = methodIdsOff + i * 8;
-    dex.writeUInt16LE(typeIdx(m.cls), off);
-    dex.writeUInt16LE(m.protoIdx, off + 2);
-    dex.writeUInt32LE(strIdx(m.name), off + 4);
-  }
-
-  // 5. Write class_def_item
-  dex.writeUInt32LE(typeIdx(activityDescriptor), classDefsOff); // class_idx
-  dex.writeUInt32LE(0x0001, classDefsOff + 4); // ACC_PUBLIC
-  dex.writeUInt32LE(typeIdx("Landroid/app/Activity;"), classDefsOff + 8); // superclass_idx
-  dex.writeUInt32LE(0, classDefsOff + 12); // interfaces_off
-  dex.writeUInt32LE(strIdx("MainActivity.java"), classDefsOff + 16); // source_file_idx
-  dex.writeUInt32LE(0, classDefsOff + 20); // annotations_off
-  dex.writeUInt32LE(classDataOff, classDefsOff + 24); // class_data_off
-  dex.writeUInt32LE(0, classDefsOff + 28); // static_values_off
-
-  // 6. Copy data section items
-  typeListsBuf.copy(dex, typeListsOff);
-  code1Buf.copy(dex, code1Off);
-  code2Fixed.copy(dex, code2Off);
+  stringDataOffsets.forEach((offset, index) => dex.writeUInt32LE(offset, stringIdsOff + index * 4));
+  typeDescriptors.forEach((type, index) => dex.writeUInt32LE(strIdx(type), typeIdsOff + index * 4));
+  protos.forEach((proto, index) => {
+    const offset = protoIdsOff + index * 12;
+    dex.writeUInt32LE(strIdx(proto.shorty), offset);
+    dex.writeUInt32LE(typeIdx(proto.returnType), offset + 4);
+    dex.writeUInt32LE(proto.parametersOff ?? 0, offset + 8);
+  });
+  // field_id_item: class_idx, type_idx, name_idx.
+  dex.writeUInt16LE(typeIdx(activityDescriptor), fieldIdsOff);
+  dex.writeUInt16LE(typeIdx(webViewType), fieldIdsOff + 2);
+  dex.writeUInt32LE(strIdx(fieldName), fieldIdsOff + 4);
+  rawMethods.forEach((method, index) => {
+    const offset = methodIdsOff + index * 8;
+    dex.writeUInt16LE(typeIdx(method.cls), offset);
+    dex.writeUInt16LE(method.protoIdx!, offset + 2);
+    dex.writeUInt32LE(strIdx(method.name), offset + 4);
+  });
+  dex.writeUInt32LE(typeIdx(activityDescriptor), classDefsOff);
+  dex.writeUInt32LE(0x0001, classDefsOff + 4);
+  dex.writeUInt32LE(typeIdx(activityType), classDefsOff + 8);
+  dex.writeUInt32LE(0, classDefsOff + 12);
+  dex.writeUInt32LE(strIdx(sourceFile), classDefsOff + 16);
+  dex.writeUInt32LE(0, classDefsOff + 20);
+  dex.writeUInt32LE(classDataOff, classDefsOff + 24);
+  dex.writeUInt32LE(0, classDefsOff + 28);
+  typeListsRaw.copy(dex, typeListsOff);
+  codeItems.forEach((code, index) => code.copy(dex, codeOffsets[index]!));
   stringDataRaw.copy(dex, stringDataStartOff);
   classDataRaw.copy(dex, classDataOff);
   mapBuf.copy(dex, mapOff);
 
-  // 7. Write header_item
   Buffer.from("dex\n035\0", "ascii").copy(dex, 0);
   dex.writeUInt32LE(fileSize, 32);
-  dex.writeUInt32LE(0x70, 36); // header_size
-  dex.writeUInt32LE(0x12345678, 40); // endian_tag
-  dex.writeUInt32LE(0, 44); // link_size
-  dex.writeUInt32LE(0, 48); // link_off
-  dex.writeUInt32LE(mapOff, 52); // map_off
-  dex.writeUInt32LE(rawStrings.length, 56); // string_ids_size
-  dex.writeUInt32LE(stringIdsOff, 60); // string_ids_off
-  dex.writeUInt32LE(typeDescriptors.length, 64); // type_ids_size
-  dex.writeUInt32LE(typeIdsOff, 68); // type_ids_off
-  dex.writeUInt32LE(protos.length, 72); // proto_ids_size
-  dex.writeUInt32LE(protoIdsOff, 76); // proto_ids_off
-  dex.writeUInt32LE(0, 80); // field_ids_size
-  dex.writeUInt32LE(0, 84); // field_ids_off
-  dex.writeUInt32LE(rawMethods.length, 88); // method_ids_size
-  dex.writeUInt32LE(methodIdsOff, 92); // method_ids_off
-  dex.writeUInt32LE(1, 96); // class_defs_size
-  dex.writeUInt32LE(classDefsOff, 100); // class_defs_off
-  dex.writeUInt32LE(fileSize - dataOff, 104); // data_size
-  dex.writeUInt32LE(dataOff, 108); // data_off
+  dex.writeUInt32LE(0x70, 36);
+  dex.writeUInt32LE(0x12345678, 40);
+  dex.writeUInt32LE(mapOff, 52);
+  dex.writeUInt32LE(rawStrings.length, 56);
+  dex.writeUInt32LE(stringIdsOff, 60);
+  dex.writeUInt32LE(typeDescriptors.length, 64);
+  dex.writeUInt32LE(typeIdsOff, 68);
+  dex.writeUInt32LE(protos.length, 72);
+  dex.writeUInt32LE(protoIdsOff, 76);
+  dex.writeUInt32LE(1, 80);
+  dex.writeUInt32LE(fieldIdsOff, 84);
+  dex.writeUInt32LE(rawMethods.length, 88);
+  dex.writeUInt32LE(methodIdsOff, 92);
+  dex.writeUInt32LE(1, 96);
+  dex.writeUInt32LE(classDefsOff, 100);
+  dex.writeUInt32LE(fileSize - dataOff, 104);
+  dex.writeUInt32LE(dataOff, 108);
 
-  // 8. Compute SHA-1 signature (bytes 32..end) and Adler-32 checksum (bytes 12..end)
-  const sha1 = createHash("sha1").update(dex.subarray(32)).digest();
-  sha1.copy(dex, 12);
-  const checksum = adler32(dex, 12);
-  dex.writeUInt32LE(checksum, 8);
-
+  createHash("sha1").update(dex.subarray(32)).digest().copy(dex, 12);
+  dex.writeUInt32LE(adler32(dex, 12), 8);
   return dex;
 }
 
@@ -1089,6 +1162,43 @@ function buildZipAlignedArchive(
   return Buffer.concat([...localParts, centralDir, eocd]);
 }
 
+const DEFAULT_SERVER_URL = "http://10.0.2.2:4100";
+const MOBILE_CLIENT_FILES = ["index.html", "styles.css", "app.js"] as const;
+
+function normalizeProjectSlug(value: string): string {
+  if (typeof value !== "string" || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value)) {
+    throw new ValidationError("projectSlug must be a valid lowercase project slug.");
+  }
+  return value;
+}
+
+function normalizeServerUrl(value: string): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2048) {
+    throw new ValidationError("serverUrl must be a valid absolute URL of at most 2048 characters.");
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ValidationError("serverUrl must be a valid absolute URL.");
+  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new ValidationError("serverUrl must be an HTTP(S) origin or base path without credentials, query, or fragment.");
+  }
+  url.pathname = url.pathname.replace(/\/+$/, "").replace(/\/dashboard$/, "");
+  return url.toString().replace(/\/$/, "");
+}
+
+function buildMobileClientConfig(config: Record<string, unknown>): Buffer {
+  // JSON is emitted as data, not executable interpolation; escaping also keeps the
+  // generated script safe if future configuration contains markup-like text.
+  const json = JSON.stringify(config)
+    .replace(/</g, "\\u003c")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+  return Buffer.from(`window.__MARRY_BASE_CONFIG__ = Object.freeze(${json});\n`, "utf8");
+}
+
 export async function buildMarryBaseApk(options?: {
   projectSlug?: string;
   serverUrl?: string;
@@ -1096,19 +1206,29 @@ export async function buildMarryBaseApk(options?: {
   versionCode?: number;
   actorId?: string | null;
 }): Promise<BuiltApkInfo> {
-  const packageName = options?.projectSlug
-    ? `com.marrybase.app.${options.projectSlug.replace(/[^a-z0-9]/gi, "").toLowerCase()}`
+  const projectSlug = options?.projectSlug === undefined
+    ? null
+    : normalizeProjectSlug(options.projectSlug);
+  const packageName = projectSlug
+    ? `com.marrybase.app.${projectSlug.replace(/-/g, "")}`
     : "com.marrybase.platform";
-  const versionName = options?.versionName || "1.0.0";
-  const versionCode = options?.versionCode || 1;
-  const serverUrl = options?.serverUrl || "http://10.0.2.2:4100";
+  const versionName = options?.versionName ?? "1.0.0";
+  if (typeof versionName !== "string" || !/^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$/.test(versionName)) {
+    throw new ValidationError("versionName must be 1–32 characters using letters, numbers, dots, underscores, or hyphens.");
+  }
+  const versionCode = options?.versionCode ?? 1;
+  if (!Number.isInteger(versionCode) || versionCode < 1 || versionCode > 2_100_000_000) {
+    throw new ValidationError("versionCode must be an integer between 1 and 2100000000.");
+  }
+  const serverUrl = normalizeServerUrl(options?.serverUrl ?? DEFAULT_SERVER_URL);
 
-  const logoPngPath = resolve(process.cwd(), "assets", "logo.png");
-  const logoSvgPath = resolve(process.cwd(), "assets", "logo.svg");
-
-  const [logoPng, logoSvg] = await Promise.all([
-    readFile(logoPngPath),
-    readFile(logoSvgPath),
+  const [logoPng, logoSvg, mobileIcon, ...mobileClientAssets] = await Promise.all([
+    readFile(resolve(process.cwd(), "assets", "logo.png")),
+    readFile(resolve(process.cwd(), "assets", "logo.svg")),
+    readFile(resolve(process.cwd(), "public", "mobile", "app-icon.png")),
+    ...MOBILE_CLIENT_FILES.map((fileName) =>
+      readFile(resolve(process.cwd(), "public", "mobile", fileName))
+    ),
   ]);
 
   // Read multi-density Android launcher icons (fallback to logoPng if a density file is missing)
@@ -1155,7 +1275,7 @@ export async function buildMarryBaseApk(options?: {
         packageName,
         versionName,
         versionCode,
-        projectSlug: options?.projectSlug ?? null,
+        projectSlug,
         serverUrl,
         sdkVersion: "1.0.0",
         builtAt: new Date().toISOString(),
@@ -1166,23 +1286,14 @@ export async function buildMarryBaseApk(options?: {
     "utf8"
   );
 
-  const mobileIndexHtml = Buffer.from(
-    `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MARRY BASE Mobile Studio</title>
-</head>
-<body style="background:#0b0f17;color:#f8fafc;font-family:sans-serif;text-align:center;padding:2rem;">
-  <img src="../../res/drawable/logo.png" alt="MARRY BASE App Icon" style="width:96px;height:96px;border-radius:20px;" />
-  <h1>MARRY BASE</h1>
-  <p>Connected Mobile Client (${packageName} v${versionName})</p>
-  <p>Endpoint: ${serverUrl}</p>
-</body>
-</html>`,
-    "utf8"
-  );
+  const mobileClientConfig = buildMobileClientConfig({
+    platform: "MARRY BASE",
+    packageName,
+    versionName,
+    versionCode,
+    projectSlug,
+    serverUrl,
+  });
 
   const coreEntries: Array<{ name: string; data: Buffer; store?: boolean }> = [
     { name: "AndroidManifest.xml", data: manifestBin, store: false },
@@ -1204,7 +1315,13 @@ export async function buildMarryBaseApk(options?: {
       data: mobileConfigJson,
       store: false,
     },
-    { name: "assets/www/index.html", data: mobileIndexHtml, store: false },
+    ...MOBILE_CLIENT_FILES.map((fileName, index) => ({
+      name: `assets/www/${fileName}`,
+      data: mobileClientAssets[index]!,
+      store: false,
+    })),
+    { name: "assets/www/config.js", data: mobileClientConfig, store: false },
+    { name: "assets/www/app-icon.png", data: mobileIcon, store: false },
   ];
 
   const { manifestMf, signatureSf, signatureRsa } =
@@ -1220,18 +1337,10 @@ export async function buildMarryBaseApk(options?: {
   const apkBuffer = buildZipAlignedArchive(allEntries);
   const checksumSha256 = createHash("sha256").update(apkBuffer).digest("hex");
 
-  const fileName = options?.projectSlug
-    ? `marry-base-${options.projectSlug}.apk`
-    : "marry-base.apk";
+  const fileName = projectSlug ? `marry-base-${projectSlug}.apk` : "marry-base.apk";
   const filePath = resolve(process.cwd(), "releases", fileName);
   await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, apkBuffer);
-
-  // Also write default releases/marry-base.apk so it is always up-to-date
-  const defaultApkPath = resolve(process.cwd(), "releases", "marry-base.apk");
-  if (filePath !== defaultApkPath) {
-    await writeFile(defaultApkPath, apkBuffer);
-  }
 
   const builtAt = new Date().toISOString();
 
@@ -1261,7 +1370,7 @@ export async function buildMarryBaseApk(options?: {
     packageName,
     versionName,
     versionCode,
-    projectSlug: options?.projectSlug ?? null,
+    projectSlug,
     fileName,
     filePath,
     sizeBytes: apkBuffer.length,
@@ -1271,13 +1380,39 @@ export async function buildMarryBaseApk(options?: {
   };
 }
 
+export async function getBuiltProjectApk(projectSlug: string): Promise<{
+  fileName: string;
+  filePath: string;
+  checksumSha256: string;
+  buffer: Buffer;
+}> {
+  const slug = normalizeProjectSlug(projectSlug);
+  const fileName = `marry-base-${slug}.apk`;
+  const filePath = resolve(process.cwd(), "releases", fileName);
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new NotFoundError("This project APK has not been built yet. Build it from the project’s APK workspace first.");
+    }
+    throw error;
+  }
+  return {
+    fileName,
+    filePath,
+    checksumSha256: createHash("sha256").update(buffer).digest("hex"),
+    buffer,
+  };
+}
+
 export async function getOrBuildDefaultApk(): Promise<{
   info: BuiltApkInfo;
   buffer: Buffer;
 }> {
   const defaultApkPath = resolve(process.cwd(), "releases", "marry-base.apk");
   try {
-    await stat(defaultApkPath);
+    const fileStat = await stat(defaultApkPath);
     const buffer = await readFile(defaultApkPath);
     const checksumSha256 = createHash("sha256").update(buffer).digest("hex");
     return {
@@ -1304,11 +1439,15 @@ export async function getOrBuildDefaultApk(): Promise<{
           "res/drawable/logo.svg",
           "assets/marry-base-config.json",
           "assets/www/index.html",
+          "assets/www/styles.css",
+          "assets/www/app.js",
+          "assets/www/config.js",
+          "assets/www/app-icon.png",
           "META-INF/MANIFEST.MF",
           "META-INF/MARRYBAS.SF",
           "META-INF/MARRYBAS.RSA",
         ],
-        builtAt: new Date().toISOString(),
+        builtAt: fileStat.mtime.toISOString(),
       },
       buffer,
     };

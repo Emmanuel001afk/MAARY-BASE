@@ -19,4 +19,20 @@ android {
             minifyEnabled false
         }
     }
+
+    // Package the same CSP-friendly mobile hub used by the downloadable builder.
+    sourceSets {
+        main.assets.srcDir(layout.buildDirectory.dir("generated/mobileAssets"))
+    }
+}
+
+def mobileAssetsDir = layout.buildDirectory.dir("generated/mobileAssets")
+tasks.register("syncMobileClient", Copy) {
+    from("../../public/mobile") {
+        into "www"
+    }
+    into mobileAssetsDir
+}
+tasks.named("preBuild") {
+    dependsOn("syncMobileClient")
 }

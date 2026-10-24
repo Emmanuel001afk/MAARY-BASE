@@ -18,8 +18,9 @@ All project-scoped endpoints accept either a `:projectRef` slug (e.g. `acme-app`
 - `GET /ready` — Checks PostgreSQL query execution, migration state, and storage directory writability (returns `503` if unhealthy).
 - `GET /v1/metrics` — Operational metrics in JSON or Prometheus text format (`?format=prometheus`).
 - `GET /v1/platform` — Platform version, database mode, and module statuses.
-- `POST /v1/platform/apk/build` — Build the APK (requires a platform access JWT).
-- `GET /v1/platform/apk/download` — Download the current APK.
+- `POST /v1/platform/apk/build` — Build the APK (requires a platform access JWT). Optional `projectSlug`, `serverUrl`, `versionName`, and `versionCode` produce a configured project artifact.
+- `GET /v1/platform/apk/download` — Download the current default APK.
+- `GET /v1/platform/apk/download?projectSlug=<slug>` — Download the exact previously built project artifact; returns 404 until that project APK is built.
 - `POST /v1/platform/auth/register` — Register a platform account (`{ email, password, name }`). In production, the first account must include the configured `x-platform-bootstrap-token` header to receive the initial superadmin role; later accounts are ordinary accounts.
 - `POST /v1/platform/auth/login` — Sign in platform operator (`{ email, password }`).
 - `POST /v1/platform/auth/refresh` — Rotate platform refresh token (`{ refreshToken }`).
