@@ -16,6 +16,7 @@ import {
   ValidationError,
 } from "../lib/errors.js";
 import { recordAuditEvent } from "./audit.service.js";
+import { ensureDefaultOrganizationForUser } from "./organization.service.js";
 
 export interface PlatformUser {
   id: string;
@@ -108,6 +109,7 @@ export async function registerPlatformUser(input: {
       [email, passwordHash, (input.name ?? "").trim() || email.split("@")[0]!]
     );
     const user = insertRes.rows[0]!;
+    await ensureDefaultOrganizationForUser(user, client);
     const auth = await issuePlatformTokens(user, input.ipAddress, input.userAgent, client);
     return { user, auth };
   });
@@ -154,6 +156,7 @@ export async function loginPlatformUser(input: {
     [row.id]
   );
   const user = updateRes.rows[0]!;
+  await ensureDefaultOrganizationForUser(user);
 
   await recordAuditEvent({
     actorType: "user",
@@ -327,4 +330,229 @@ export async function listPlatformUsers(): Promise<PlatformUser[]> {
      FROM platform_users ORDER BY created_at ASC`
   );
   return res.rows;
+}
+
+export async function updatePlatformUserProfile(
+  userId: string,
+  patch: { name?: string }
+): Promise<PlatformUser> {
+  const current = await getPlatformUserById(userId);
+  const name = patch.name !== undefined ? patch.name.trim() : current.name;
+  if (!name || name.length > 100) {
+    throw new ValidationError("Display name must be between 1 and 100 characters.");
+  }
+  const res = await pool.query<PlatformUser>(
+    `UPDATE platform_users
+     SET name = $2, updated_at = now()
+     WHERE id = $1
+     RETURNING id, email, name, is_superadmin, status, last_login_at, created_at, updated_at`,
+    [userId, name]
+  );
+  return res.rows[0]!;
+}
+
+export async function changePlatformUserPassword(input: {
+  userId: string;
+  currentPassword: string;
+  newPassword: string;
+  keepSessionId?: string;
+}): Promise<void> {
+  if (!input.newPassword || input.newPassword.length < 8) {
+    throw new ValidationError("New password must be at least 8 characters long.");
+  }
+  const res = await pool.query<{ password_hash: string }>(
+    `SELECT password_hash FROM platform_users WHERE id = $1`,
+    [input.userId]
+  );
+  const row = res.rows[0];
+  if (!row) {
+    throw new NotFoundError("Platform user not found.");
+  }
+  const valid = await verifyPassword(input.currentPassword, row.password_hash);
+  if (!valid) {
+    throw new UnauthorizedError("Current password is incorrect.");
+  }
+
+  const nextHash = await hashPassword(input.newPassword);
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE platform_users SET password_hash = $2, updated_at = now() WHERE id = $1`,
+      [input.userId, nextHash]
+    );
+    if (input.keepSessionId) {
+      await client.query(
+        `UPDATE platform_sessions SET revoked_at = now()
+         WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`,
+        [input.userId, input.keepSessionId]
+      );
+    } else {
+      await client.query(
+        `UPDATE platform_sessions SET revoked_at = now()
+         WHERE user_id = $1 AND revoked_at IS NULL`,
+        [input.userId]
+      );
+    }
+  });
+
+  await recordAuditEvent({
+    actorType: "user",
+    actorId: input.userId,
+    action: "platform.user.password_changed",
+    resourceType: "platform_user",
+    resourceId: input.userId,
+  });
+}
+
+export async function adminCreatePlatformUser(input: {
+  actorId: string;
+  email: string;
+  password: string;
+  name?: string;
+  isSuperadmin?: boolean;
+}): Promise<PlatformUser> {
+  const email = input.email.trim().toLowerCase();
+  if (!email || !email.includes("@")) {
+    throw new ValidationError("A valid email address is required.");
+  }
+  if (!input.password || input.password.length < 8) {
+    throw new ValidationError("Password must be at least 8 characters long.");
+  }
+  const passwordHash = await hashPassword(input.password);
+
+  const user = await withTransaction(async (client) => {
+    const dup = await client.query(
+      `SELECT 1 FROM platform_users WHERE email = $1`,
+      [email]
+    );
+    if (dup.rowCount && dup.rowCount > 0) {
+      throw new ConflictError("A platform account with this email already exists.");
+    }
+    const res = await client.query<PlatformUser>(
+      `INSERT INTO platform_users (email, password_hash, name, is_superadmin, status)
+       VALUES ($1, $2, $3, $4, 'active')
+       RETURNING id, email, name, is_superadmin, status, last_login_at, created_at, updated_at`,
+      [
+        email,
+        passwordHash,
+        (input.name ?? "").trim() || email.split("@")[0]!,
+        Boolean(input.isSuperadmin),
+      ]
+    );
+    const created = res.rows[0]!;
+    await ensureDefaultOrganizationForUser(created, client);
+    return created;
+  });
+
+  await recordAuditEvent({
+    actorType: "user",
+    actorId: input.actorId,
+    action: "platform.admin.user_created",
+    resourceType: "platform_user",
+    resourceId: user.id,
+    metadata: { email: user.email, isSuperadmin: user.is_superadmin },
+  });
+
+  return user;
+}
+
+export async function adminUpdatePlatformUser(input: {
+  actorId: string;
+  targetUserId: string;
+  name?: string;
+  status?: "active" | "suspended" | "disabled";
+  isSuperadmin?: boolean;
+  newPassword?: string;
+}): Promise<PlatformUser> {
+  if (
+    input.status !== undefined &&
+    !["active", "suspended", "disabled"].includes(input.status)
+  ) {
+    throw new ValidationError(
+      "Status must be 'active', 'suspended', or 'disabled'."
+    );
+  }
+  if (input.newPassword !== undefined && input.newPassword.length < 8) {
+    throw new ValidationError("New password must be at least 8 characters long.");
+  }
+  const nextPasswordHash = input.newPassword
+    ? await hashPassword(input.newPassword)
+    : null;
+
+  const updated = await withTransaction(async (client) => {
+    await lockPlatformBootstrap(client);
+    const targetRes = await client.query<PlatformUser>(
+      `SELECT id, email, name, is_superadmin, status, last_login_at, created_at, updated_at
+       FROM platform_users WHERE id = $1`,
+      [input.targetUserId]
+    );
+    const target = targetRes.rows[0];
+    if (!target) {
+      throw new NotFoundError("Platform user not found.");
+    }
+
+    const nextSuperadmin =
+      input.isSuperadmin !== undefined ? input.isSuperadmin : target.is_superadmin;
+    const nextStatus = input.status ?? target.status;
+    const nextName =
+      input.name !== undefined ? input.name.trim() || target.name : target.name;
+
+    // Protect the last active superadmin from being demoted or disabled
+    if (
+      target.is_superadmin &&
+      target.status === "active" &&
+      (!nextSuperadmin || nextStatus !== "active")
+    ) {
+      const activeAdminsRes = await client.query<{ cnt: number }>(
+        `SELECT COUNT(*)::int AS cnt FROM platform_users
+         WHERE is_superadmin = true AND status = 'active' AND id <> $1`,
+        [target.id]
+      );
+      if ((activeAdminsRes.rows[0]?.cnt ?? 0) === 0) {
+        throw new ValidationError(
+          "Cannot demote or disable the last active platform superadmin."
+        );
+      }
+    }
+
+    const res = nextPasswordHash
+      ? await client.query<PlatformUser>(
+          `UPDATE platform_users
+           SET name = $2, status = $3, is_superadmin = $4, password_hash = $5, updated_at = now()
+           WHERE id = $1
+           RETURNING id, email, name, is_superadmin, status, last_login_at, created_at, updated_at`,
+          [target.id, nextName, nextStatus, nextSuperadmin, nextPasswordHash]
+        )
+      : await client.query<PlatformUser>(
+          `UPDATE platform_users
+           SET name = $2, status = $3, is_superadmin = $4, updated_at = now()
+           WHERE id = $1
+           RETURNING id, email, name, is_superadmin, status, last_login_at, created_at, updated_at`,
+          [target.id, nextName, nextStatus, nextSuperadmin]
+        );
+
+    if (nextStatus !== "active" || nextPasswordHash) {
+      await client.query(
+        `UPDATE platform_sessions SET revoked_at = now()
+         WHERE user_id = $1 AND revoked_at IS NULL`,
+        [target.id]
+      );
+    }
+
+    return res.rows[0]!;
+  });
+
+  await recordAuditEvent({
+    actorType: "user",
+    actorId: input.actorId,
+    action: "platform.admin.user_updated",
+    resourceType: "platform_user",
+    resourceId: updated.id,
+    metadata: {
+      status: updated.status,
+      isSuperadmin: updated.is_superadmin,
+      passwordReset: Boolean(nextPasswordHash),
+    },
+  });
+
+  return updated;
 }

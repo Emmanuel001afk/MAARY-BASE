@@ -27,6 +27,23 @@ export interface ResolvedProjectAccess {
   hasValidCredentials: boolean;
 }
 
+function parseCookieValue(cookieHeader: string | undefined, name: string): string | null {
+  if (!cookieHeader) return null;
+  for (const part of cookieHeader.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    if (key === name) {
+      try {
+        return decodeURIComponent(part.slice(idx + 1).trim());
+      } catch {
+        return part.slice(idx + 1).trim();
+      }
+    }
+  }
+  return null;
+}
+
 function extractBearerToken(req: FastifyRequest): string | null {
   const authHeader = req.headers.authorization;
   if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
@@ -35,6 +52,10 @@ function extractBearerToken(req: FastifyRequest): string | null {
   const platformToken = req.headers["x-platform-token"];
   if (typeof platformToken === "string" && platformToken.trim()) {
     return platformToken.trim();
+  }
+  const cookieToken = parseCookieValue(req.headers.cookie, "maary_platform_token");
+  if (cookieToken && cookieToken.trim()) {
+    return cookieToken.trim();
   }
   return null;
 }
@@ -83,6 +104,29 @@ export async function requirePlatformUser(
     throw new ForbiddenError(`Platform account is ${user.status}.`);
   }
   return user;
+}
+
+export async function requireSuperadmin(
+  req: FastifyRequest
+): Promise<PlatformUser> {
+  const user = await requirePlatformUser(req);
+  if (!user.is_superadmin) {
+    throw new ForbiddenError(
+      "Platform superadmin privileges are required for this operation."
+    );
+  }
+  return user;
+}
+
+export function extractPlatformSessionId(req: FastifyRequest): string | undefined {
+  const token = extractBearerToken(req);
+  if (!token || token.startsWith("mb_")) return undefined;
+  try {
+    const claims = verifyJwt(token);
+    return typeof claims.session_id === "string" ? claims.session_id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function optionalPlatformUser(

@@ -1,7 +1,7 @@
 import { buildApp } from "./app.js";
 import { config } from "./config.js";
 import { closeDatabase } from "./db/pool.js";
-import { getApkStatus } from "./services/apk.service.js";
+import { inspectAndroidEnvironment } from "./services/android-artifact.service.js";
 
 const app = await buildApp();
 
@@ -21,18 +21,15 @@ process.once("SIGINT", () => void shutdown("SIGINT"));
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
 try {
-  const apk = await getApkStatus();
+  const androidStatus = await inspectAndroidEnvironment();
   app.log.info(
     {
       platform: "MARRY BASE",
-      apkState: apk.state,
-      apkFile: apk.artifact.filePath,
-      apkSha256: apk.artifact.checksumSha256,
-      gradleBuildPossible: apk.buildEnvironment.gradleBuildPossible,
+      androidStatus: androidStatus.status,
+      apkAvailable: androidStatus.downloadAvailable,
+      apkFile: androidStatus.artifact?.filePath ?? null,
     },
-    apk.state === "available"
-      ? "MARRY BASE Android artifact verified"
-      : "MARRY BASE Android artifact is not present; the API reports this instead of fabricating one"
+    androidStatus.summary
   );
   await app.listen({ host: config.HOST, port: config.PORT });
 } catch (error) {

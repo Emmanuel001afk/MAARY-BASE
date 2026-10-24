@@ -13,13 +13,21 @@ const DASHBOARD_ASSETS = {
   "/dashboard/js/actions.js": { file: "js/actions.js", type: "application/javascript; charset=utf-8" },
 } as const;
 
-async function sendDashboardAsset(
+const MOBILE_ASSETS = {
+  "/mobile/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+  "/mobile/app.js": { file: "app.js", type: "application/javascript; charset=utf-8" },
+  "/mobile/config.js": { file: "config.js", type: "application/javascript; charset=utf-8" },
+  "/mobile/app-icon.png": { file: "app-icon.png", type: "image/png" },
+} as const;
+
+async function sendAssetFromDir(
+  dir: string,
   reply: FastifyReply,
   file: string,
   contentType: string,
   cacheControl = "no-cache"
 ) {
-  const contents = await readFile(resolve(DASHBOARD_DIR, file));
+  const contents = await readFile(resolve(dir, file));
   return reply
     .header("content-type", contentType)
     .header("cache-control", cacheControl)
@@ -30,37 +38,30 @@ export async function registerDashboardRoutes(
   app: FastifyInstance
 ): Promise<void> {
   const serveIndex = async (_request: unknown, reply: FastifyReply) =>
-    sendDashboardAsset(reply, "index.html", "text/html; charset=utf-8");
+    sendAssetFromDir(DASHBOARD_DIR, reply, "index.html", "text/html; charset=utf-8");
 
   app.get("/", serveIndex);
   app.get("/dashboard", serveIndex);
+  app.get("/dashboard/", serveIndex);
+  app.get("/dashboard/index.html", serveIndex);
 
   for (const [route, asset] of Object.entries(DASHBOARD_ASSETS)) {
     app.get(route, async (_request, reply) =>
-      sendDashboardAsset(reply, asset.file, asset.type)
+      sendAssetFromDir(DASHBOARD_DIR, reply, asset.file, asset.type)
     );
   }
 
-  // The mobile connection hub is also usable in a mobile browser. The Android
-  // app has its own native equivalent; both validate /ready before proceeding.
-  const mobileAssets = {
-    "/mobile/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
-    "/mobile/app.js": { file: "app.js", type: "application/javascript; charset=utf-8" },
-    "/mobile/config.js": { file: "config.js", type: "application/javascript; charset=utf-8" },
-    "/mobile/app-icon.png": { file: "app-icon.png", type: "image/png" },
-  } as const;
+  const serveMobileIndex = async (_request: unknown, reply: FastifyReply) =>
+    sendAssetFromDir(MOBILE_DIR, reply, "index.html", "text/html; charset=utf-8");
 
-  const serveMobileIndex = async (_request: unknown, reply: FastifyReply) => {
-    const contents = await readFile(resolve(MOBILE_DIR, "index.html"));
-    return reply.header("content-type", "text/html; charset=utf-8").send(contents);
-  };
-  app.get("/mobile", serveMobileIndex);
+  app.get("/mobile", async (_request, reply) => reply.redirect("/mobile/"));
   app.get("/mobile/", serveMobileIndex);
-  for (const [route, asset] of Object.entries(mobileAssets)) {
-    app.get(route, async (_request, reply) => {
-      const contents = await readFile(resolve(MOBILE_DIR, asset.file));
-      return reply.header("content-type", asset.type).send(contents);
-    });
+  app.get("/mobile/index.html", serveMobileIndex);
+
+  for (const [route, asset] of Object.entries(MOBILE_ASSETS)) {
+    app.get(route, async (_request, reply) =>
+      sendAssetFromDir(MOBILE_DIR, reply, asset.file, asset.type)
+    );
   }
 
   app.get("/dashboard/logo.png", async (_request, reply) => {

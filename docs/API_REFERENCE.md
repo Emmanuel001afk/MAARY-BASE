@@ -1,136 +1,89 @@
-# MAARY BASE API Reference
+# MARRY BASE API Reference
 
-All project-scoped endpoints accept either a `:projectRef` slug (e.g. `acme-app`) or project UUID.
+All project-scoped endpoints accept either a `:projectRef` slug (e.g. `acme-api`) or UUID.
 
-## Authentication Headers
+## Authentication
 
 1. **Platform Control Plane**:
-   - `Authorization: Bearer <platform_access_jwt>` (or `apikey: <project_service_role_key>` for project-scoped control endpoints).
-2. **Project Services (Data API, Auth, Storage, Functions, Realtime)**:
+   - `Authorization: Bearer <platform_access_jwt>` or `HttpOnly` cookie `maary_platform_token` (issued on `/v1/platform/auth/login` or `/register`).
+   - Project-scoped control endpoints also accept `apikey: <project_service_role_key>`.
+2. **Project Client Services (REST, RPC, Auth, Storage, Functions, Realtime)**:
    - `apikey: <mb_anon_... | mb_service_... | mb_key_...>`
-   - Optional user context: `Authorization: Bearer <project_user_access_jwt>`
+   - Optional authenticated end-user context: `Authorization: Bearer <project_user_access_jwt>`
 
 ---
 
-## 1. Health, Readiness & Platform Control Plane
+## 1. Health, Readiness & Platform Administration
 
 - `GET /health` — Process liveness check.
-- `GET /ready` — Checks PostgreSQL query execution, migration state, and storage directory writability (returns `503` if unhealthy).
-- `GET /v1/metrics` — Operational metrics in JSON or Prometheus text format (`?format=prometheus`).
-- `GET /v1/platform` — Platform version, database mode, and module statuses.
-- `GET /v1/platform/apk/status` — Operator-authenticated. Reports the artifact state (`available`, `missing`, `invalid`), SHA-256, size, metadata, structural verification, expected Gradle output path, and whether this host can run a Gradle build (`buildEnvironment.missingPrerequisites`). Always honest; never a placeholder.
-- `POST /v1/platform/apk/build` — Operator-authenticated. Runs the genuine Gradle pipeline (`android/gradlew :app:assembleDebug`) with optional `{ versionName, versionCode }`. Returns `201` with build metadata, `409 apk_build_unavailable` (with missing JDK/SDK details and instructions), or `500 apk_build_failed`/`apk_build_invalid` with a log tail. No package is fabricated.
-- `GET /v1/platform/apk/download` — Serves the verified artifact with `x-apk-sha256`; `404` when missing or invalid.
-- `POST /v1/platform/auth/register` — Register a platform account (`{ email, password, name }`). In production, the first account must include the configured `x-platform-bootstrap-token` header to receive the initial superadmin role; later accounts are ordinary accounts.
-- `POST /v1/platform/auth/login` — Sign in platform operator (`{ email, password }`).
-- `POST /v1/platform/auth/refresh` — Rotate platform refresh token (`{ refreshToken }`).
-- `POST /v1/platform/auth/logout` — Revoke current platform session.
-- `GET /v1/platform/auth/me` — Current platform operator profile.
-- `GET /v1/platform/audit` — Query platform audit trail.
-- `GET /v1/platform/extensions` & `POST /v1/platform/extensions` — List and enable supported PostgreSQL extensions.
-
-### Operational status, logs and API catalogue
-
-All require a platform operator session with access to the project unless noted.
-
-- `GET /v1/platform/status` — Platform-wide checks per subsystem with `state`, `summary`, `checks`, `verifiedBy` and a next `action`; `overall` is derived from the checks.
-- `GET /v1/platform/version` — Version, commit (when set), Node version, environment and migration counts.
-- `GET /v1/projects/:projectRef/status` — Per-project services (database, RLS, auth, API, storage, realtime, functions, jobs, backups) computed from live queries.
-- `GET /v1/projects/:projectRef/logs?source=all|audit|function|job|realtime|backup|storage&level=all|info|warn|error&limit=1..500` — Unified, server-recorded log stream with per-source counts. Unknown sources return `400 validation_error`.
-- `GET /v1/projects/:projectRef/database/roles` — Project roles, superuser/BYPASSRLS flags, grants, tables lacking RLS and policies. Never returns passwords.
-- `GET /v1/projects/:projectRef/database/connection` — Connection mode, schema, pool, timeout, extensions and capabilities. Embedded mode reports `dataDirectory`; external mode reports host/port/database/user but never a password.
-- `GET /v1/projects/:projectRef/api/endpoints` — Generated endpoint catalogue with methods, paths, curl examples and notes, derived from the current schema.
+- `GET /ready` — Verifies PostgreSQL query execution, applied migrations, and `STORAGE_DIR` writability (`503` if degraded).
+- `GET /v1/metrics` — JSON or Prometheus (`?format=prometheus`) operational metrics.
+- `GET /v1/platform` — Live module verification statuses and database mode.
+- `GET /v1/platform/diagnostics` — Detailed runtime, memory, pool, worker, storage, and module probes (requires operator auth).
+- `GET /v1/platform/auth/status` — Reports whether initial Superadmin bootstrap is open and whether `PLATFORM_BOOTSTRAP_TOKEN` is required.
+- `POST /v1/platform/auth/register` — Register operator (`{ email, password, name?, bootstrapToken? }`).
+- `POST /v1/platform/auth/login` — Authenticate operator (`{ email, password }`).
+- `POST /v1/platform/auth/refresh` — Rotate refresh token (`{ refreshToken }`).
+- `POST /v1/platform/auth/logout` — Revoke current operator session.
+- `GET /v1/platform/auth/me` & `PATCH /v1/platform/auth/me` — Read or update operator profile.
+- `POST /v1/platform/auth/change-password` — Rotate operator password (`{ currentPassword, newPassword }`).
+- `GET /v1/platform/apk/status` — Truthful inspection of Gradle/JDK/Android SDK availability and verified `.apk` artifact metadata.
+- `POST /v1/platform/apk/build` — Trigger a real Gradle APK build when host Android toolchain is installed (`503` with actionable diagnostics otherwise).
+- `GET /v1/platform/apk/download` — Download a verified, `apksigner`-checked Android `.apk` artifact (`404` if not yet built).
+- **Superadmin-Only Endpoints**:
+  - `GET /v1/platform/users`, `POST /v1/platform/users`, `PATCH /v1/platform/users/:userId`
+  - `GET /v1/platform/extensions` & `POST /v1/platform/extensions`
+  - `GET /v1/platform/backups`, `POST /v1/platform/backups`, `POST /v1/platform/backups/:backupId/verify`, `POST /v1/platform/backups/:backupId/restore`
+  - `GET /v1/platform/audit` & `GET /v1/platform/logs/errors`
 
 ---
 
-## 2. Projects, Environments, RBAC, Keys & Secrets
+## 2. Organizations / Workspaces
 
-- `GET /v1/projects` — List accessible projects.
-- `POST /v1/projects` — Create isolated project (`{ name, slug?, description?, quotas?, settings? }`).
-- `GET /v1/projects/:projectRef` — Inspect project, environments, and resource usage.
-- `PATCH /v1/projects/:projectRef` — Update project settings, status (`active`, `suspended`, `archived`), or quotas.
-- `DELETE /v1/projects/:projectRef?confirmSlug=<slug>` — Safely delete project and drop its PostgreSQL schema.
-- `GET /v1/projects/:projectRef/environments` & `POST /v1/projects/:projectRef/environments` & `DELETE /v1/projects/:projectRef/environments/:envId`
-- `GET /v1/projects/:projectRef/members` & `POST /v1/projects/:projectRef/members` & `DELETE /v1/projects/:projectRef/members/:userId`
-- `GET /v1/projects/:projectRef/api-keys?reveal=true` & `POST /v1/projects/:projectRef/api-keys`
-- `POST /v1/projects/:projectRef/api-keys/:keyId/rotate` & `DELETE /v1/projects/:projectRef/api-keys/:keyId`
-- `GET /v1/projects/:projectRef/secrets?reveal=true` & `POST /v1/projects/:projectRef/secrets` & `DELETE /v1/projects/:projectRef/secrets/:secretId`
+- `GET /v1/organizations` — List workspaces accessible to the authenticated operator.
+- `POST /v1/organizations` — Create workspace (`{ name, slug?, description?, billingTier? }`).
+- `GET /v1/organizations/:orgRef` — Workspace details, members, and assigned projects.
+- `PATCH /v1/organizations/:orgRef` — Update workspace name, tier, description, or settings.
+- `DELETE /v1/organizations/:orgRef` — Delete workspace (`{ confirmSlug }`).
+- `GET /v1/organizations/:orgRef/members`, `POST /v1/organizations/:orgRef/members`, `DELETE /v1/organizations/:orgRef/members/:userId`
 
 ---
 
-## 3. Database Management, SQL, RLS & Migrations
+## 3. Projects, Environments, Keys, Secrets & Logs
 
-- `GET /v1/projects/:projectRef/database/tables` — Inspect all tables, columns, primary keys, foreign keys, indexes, row counts, and RLS policies.
-- `POST /v1/projects/:projectRef/database/tables` — Create table (`{ name, columns, enableRls }`).
-- `PATCH /v1/projects/:projectRef/database/tables/:tableName` — Alter table (`add_column`, `drop_column`, `rename_column`, `create_index`, `drop_index`).
-- `DELETE /v1/projects/:projectRef/database/tables/:tableName` — Drop table.
-- `POST /v1/projects/:projectRef/database/tables/:tableName/rls` — Enable/disable/force Row-Level Security (`{ enabled, force }`).
-- `POST /v1/projects/:projectRef/database/policies` — Create PostgreSQL RLS policy (`{ tableName, policyName, command, usingExpression, checkExpression }`).
-- `DELETE /v1/projects/:projectRef/database/policies/:tableName/:policyName` — Delete RLS policy.
-- `POST /v1/projects/:projectRef/database/sql` — Execute parameterized SQL inside the project schema (`{ sql, params?, readOnly?, allowDestructive?, impersonate? }`).
-- `GET /v1/projects/:projectRef/database/migrations` & `POST /v1/projects/:projectRef/database/migrations` & `POST /v1/projects/:projectRef/database/migrations/:version/rollback`
-
----
-
-## 4. Data API (Auto-Generated REST, Relationships, RPC & OpenAPI)
-
-- `GET /v1/projects/:projectRef/openapi.json` — Live OpenAPI 3.1 specification for the project schema.
-- `GET /v1/projects/:projectRef/rest/:table`
-  - Query parameters:
-    - `select`: columns and embedded relationships, e.g. `id,title,author:authors(id,display_name),comments(id,body)`
-    - Filters: `<col>=eq.<val>`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in.(a,b)`, `is.null`, `is.true`, `contains`, `or=(status.eq.active,status.eq.draft)`
-    - `order`: `created_at.desc,id.asc`
-    - `limit`, `offset`, `single=true`, `count=exact`
-- `POST /v1/projects/:projectRef/rest/:table` — Insert single object or array of objects (`?on_conflict=<col>` for upserts).
-- `PATCH /v1/projects/:projectRef/rest/:table` — Update rows matching filter parameters.
-- `DELETE /v1/projects/:projectRef/rest/:table` — Delete rows matching filter parameters.
-- `POST /v1/projects/:projectRef/rpc/:fn` — Invoke a PostgreSQL function in the project schema.
+- `GET /v1/projects?organizationId=<id>` & `POST /v1/projects`
+- `GET /v1/projects/:projectRef` — Project metadata, environments, quota usage, and live subsystem overview.
+- `GET /v1/projects/:projectRef/diagnostics` — Detailed quota usage and subsystem verification.
+- `PATCH /v1/projects/:projectRef` — Update name, description, `organizationId`, `status` (`active`|`suspended`|`archived`), `quotas`, or `settings`.
+- `DELETE /v1/projects/:projectRef` — Drop isolated schema, roles, and project resources (`{ confirmSlug }`).
+- `GET|POST /v1/projects/:projectRef/environments` & `DELETE /v1/projects/:projectRef/environments/:envId`
+- `GET|POST /v1/projects/:projectRef/members` & `DELETE /v1/projects/:projectRef/members/:userId`
+- `GET|POST /v1/projects/:projectRef/api-keys`, `POST .../api-keys/:keyId/rotate`, `DELETE .../api-keys/:keyId`
+- `GET|POST /v1/projects/:projectRef/secrets` & `DELETE .../secrets/:secretId`
+- `GET /v1/projects/:projectRef/audit` & `GET /v1/projects/:projectRef/logs/errors`
+- `GET|POST /v1/projects/:projectRef/backups`, `POST .../backups/:backupId/verify`, `POST .../backups/:backupId/restore`
 
 ---
 
-## 5. Project Authentication & Identity
+## 4. Database, SQL, RLS, Migrations & Data API
 
-- `GET /v1/projects/:projectRef/auth/config` & `PATCH /v1/projects/:projectRef/auth/config` — `allow_public_signup`, `require_email_verification`, `password_min_length`, token TTLs, and `oauth_providers` (`{ github: { enabled, clientId, authorizeUrl?, tokenUrl?, scopes? }, … }`).
-- `POST /v1/projects/:projectRef/auth/signup` — Register user (`{ email, password, phone?, user_metadata? }`).
-- `POST /v1/projects/:projectRef/auth/login` — Authenticate with email & password.
-- `POST /v1/projects/:projectRef/auth/token` — OAuth2-style token endpoint (`grant_type=password|refresh_token`).
-- `POST /v1/projects/:projectRef/auth/refresh` — Rotate refresh token (`{ refresh_token }`).
-- `POST /v1/projects/:projectRef/auth/logout` — Revoke user session.
-- `POST /v1/projects/:projectRef/auth/verify` — Verify email token (`{ token }`).
-- `POST /v1/projects/:projectRef/auth/recover` & `POST /v1/projects/:projectRef/auth/reset-password`
-- `GET /v1/projects/:projectRef/auth/oauth/:provider/authorize` & `POST /v1/projects/:projectRef/auth/oauth/:provider/callback`
-- `GET /v1/projects/:projectRef/auth/user` & `PATCH /v1/projects/:projectRef/auth/user`
-- Admin routes: `GET|POST /v1/projects/:projectRef/auth/admin/users`, `GET|PATCH|DELETE /v1/projects/:projectRef/auth/admin/users/:userId`
-
----
-
-## 6. Object Storage
-
-- `GET|POST /v1/projects/:projectRef/storage/buckets`
-- `GET|PATCH|DELETE /v1/projects/:projectRef/storage/buckets/:bucketName`
-- `GET|POST /v1/projects/:projectRef/storage/buckets/:bucketName/policies` & `DELETE .../policies/:policyId`
-- `GET /v1/projects/:projectRef/storage/buckets/:bucketName/objects`
-- `POST /v1/projects/:projectRef/storage/buckets/:bucketName/objects/*` — Upload object.
-- `GET /v1/projects/:projectRef/storage/buckets/:bucketName/objects/*` — Download object (or `?metadata=true`).
-- `DELETE /v1/projects/:projectRef/storage/buckets/:bucketName/objects/*` — Delete object.
-- `POST /v1/projects/:projectRef/storage/buckets/:bucketName/sign/*` — Generate signed URL (`{ operation: "download" | "upload", expiresIn }`).
-- `GET /v1/projects/:projectRef/storage/signed/download?token=...` & `POST /v1/projects/:projectRef/storage/signed/upload?token=...`
-- Multipart routes:
-  - `POST /v1/projects/:projectRef/storage/multipart/initiate`
-  - `POST /v1/projects/:projectRef/storage/multipart/:uploadId/parts/:partNumber`
-  - `POST /v1/projects/:projectRef/storage/multipart/:uploadId/complete`
-  - `POST /v1/projects/:projectRef/storage/multipart/cleanup`
+- `GET|POST /v1/projects/:projectRef/database/tables`
+- `PATCH /v1/projects/:projectRef/database/tables/:tableName` — `add_column` (with optional FK `references`), `drop_column`, `rename_column`, `create_index`, `drop_index`, `toggle_rls`.
+- `DELETE /v1/projects/:projectRef/database/tables/:tableName`
+- `POST /v1/projects/:projectRef/database/tables/:tableName/rls`
+- `GET /v1/projects/:projectRef/database/diagnostics` — Least-privilege role verification and relation sizes.
+- `POST /v1/projects/:projectRef/database/policies` & `DELETE .../database/policies/:tableName/:policyName`
+- `POST /v1/projects/:projectRef/database/sql`
+- `GET|POST /v1/projects/:projectRef/database/migrations` & `POST .../database/migrations/:version/rollback`
+- `GET /v1/projects/:projectRef/openapi.json`
+- `GET|POST|PATCH|DELETE /v1/projects/:projectRef/rest/:table`
+- `POST /v1/projects/:projectRef/rpc/:fn`
 
 ---
 
-## 7. Realtime, Functions, Jobs & Backups
+## 5. Project Authentication, Storage, Realtime, Functions & Jobs
 
-- `GET /v1/projects/:projectRef/realtime/ws` — WebSocket connection (`?apikey=...`).
-- `POST /v1/projects/:projectRef/realtime/broadcast` — Publish broadcast event (`{ topic, event, payload }`).
-- `GET /v1/projects/:projectRef/realtime/events` — Query persisted realtime events.
-- `GET|POST /v1/projects/:projectRef/functions` & `GET|DELETE /v1/projects/:projectRef/functions/:slug`
-- `ALL /v1/projects/:projectRef/functions/:slug/invoke` — Invoke function.
-- `GET /v1/projects/:projectRef/functions-logs` — Inspect function invocation logs.
-- `GET|POST /v1/projects/:projectRef/jobs`, `POST /v1/projects/:projectRef/jobs/process`, `POST /v1/projects/:projectRef/jobs/:jobId/cancel`
-- `GET|POST /v1/projects/:projectRef/schedules` & `DELETE /v1/projects/:projectRef/schedules/:scheduleId`
-- `GET|POST /v1/projects/:projectRef/backups`, `POST /v1/projects/:projectRef/backups/:backupId/verify`, `POST /v1/projects/:projectRef/backups/:backupId/restore`
+- **Auth**: `GET|PATCH .../auth/config`, `POST .../auth/signup`, `POST .../auth/login`, `POST .../auth/token`, `POST .../auth/refresh`, `POST .../auth/logout`, `POST .../auth/verify`, `POST .../auth/recover`, `POST .../auth/reset-password`, `GET .../auth/oauth/:provider/authorize`, `POST .../auth/oauth/:provider/callback`, `GET|PATCH .../auth/user`, `GET|POST .../auth/admin/users`, `GET|PATCH|DELETE .../auth/admin/users/:userId`, `GET .../auth/admin/sessions`, `DELETE .../auth/admin/sessions/:sessionId`.
+- **Storage**: `GET|POST .../storage/buckets`, `GET|PATCH|DELETE .../storage/buckets/:bucketName`, `GET|POST .../storage/buckets/:bucketName/policies`, `DELETE .../policies/:policyId`, `GET .../objects`, `GET|POST|DELETE .../objects/*` (`?metadata=true`), `POST .../sign/*`, `GET .../signed/download`, `POST .../signed/upload`, multipart upload endpoints.
+- **Realtime**: `WS /v1/projects/:projectRef/realtime/ws?apikey=...`, `GET .../realtime/status`, `GET|POST .../realtime/channels`, `POST .../realtime/broadcast`, `GET .../realtime/events`.
+- **Functions & Jobs**: `GET|POST .../functions`, `GET|DELETE .../functions/:slug`, `ALL .../functions/:slug/invoke`, `GET .../functions/:slug/logs`, `GET|POST .../jobs`, `POST .../jobs/process`, `POST .../jobs/:jobId/retry`, `POST .../jobs/:jobId/cancel`, `GET|POST .../schedules`, `DELETE .../schedules/:scheduleId`.

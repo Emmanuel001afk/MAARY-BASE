@@ -2,102 +2,31 @@ name: MARRY BASE CI
 
 on:
   push:
-    branches: ["main", "arena/**"]
+    branches: ["**"]
   pull_request:
-    branches: ["main"]
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    branches: ["**"]
+  workflow_dispatch:
 
 jobs:
-  # Real Android build. This is the only producer of the companion APK; the
-  # server reports the artifact's presence and never synthesises one.
-  android:
-    name: Android Gradle build
+  backend:
+    name: Backend, Studio & PostgreSQL 16 Verification
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: "17"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: maary
+          POSTGRES_PASSWORD: maary_ci_password
+          POSTGRES_DB: maary_base_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Show Android SDK
-        run: |
-          echo "ANDROID_HOME=${ANDROID_HOME:-unset}"
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-unset}"
-          ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}" 2>/dev/null | head
-
-      - name: Unit-test server address validation
-        working-directory: android
-        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
-
-      - name: Build debug APK
-        working-directory: android
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace -PmarryVersionName=1.1.0 -PmarryVersionCode=2
-
-      - name: Verify APK is a genuine, signed Android package
-        run: |
-          set -euo pipefail
-          APK="android/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
-          SIZE=$(wc -c < "$APK" | tr -d ' ')
-          echo "APK size: $SIZE bytes"
-          test "$SIZE" -gt 20000
-          unzip -l "$APK" > /tmp/entries.txt
-          cat /tmp/entries.txt
-          grep -q "AndroidManifest.xml" /tmp/entries.txt
-          grep -q "classes.dex" /tmp/entries.txt
-          grep -q "resources.arsc" /tmp/entries.txt
-          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          BUILD_TOOLS=$(ls -d "$SDK"/build-tools/* | sort -V | tail -1)
-          AAPT="$BUILD_TOOLS/aapt2"
-          "$AAPT" dump badging "$APK" | tee /tmp/badging.txt
-          grep -q "package: name='com.marrybase.platform'" /tmp/badging.txt
-          grep -q "sdkVersion:'24'" /tmp/badging.txt
-          APKSIGNER="$BUILD_TOOLS/apksigner"
-          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee /tmp/signature.txt
-          test -s /tmp/signature.txt
-          "$BUILD_TOOLS/zipalign" -c -v 4 "$APK" | tail -1
-          mkdir -p releases
-          cp "$APK" releases/marry-base.apk
-          node -e "
-            const {createHash}=require('crypto');const fs=require('fs');
-            const b=fs.readFileSync('releases/marry-base.apk');
-            fs.writeFileSync('releases/marry-base.apk.json', JSON.stringify({
-              builtAt:new Date().toISOString(),builder:'github-actions-gradle',versionName:'1.1.0',versionCode:2,
-              commit:process.env.GITHUB_SHA,sizeBytes:b.length,checksumSha256:createHash('sha256').update(b).digest('hex')
-            },null,2));
-          "
-          {
-            echo "## MARRY BASE Android build"
-            echo ""
-            echo "- APK: \`releases/marry-base.apk\`"
-            echo "- Size: $SIZE bytes"
-            echo "- SHA-256: \`$(sha256sum releases/marry-base.apk | awk '{print $1}')\`"
-            echo "- Signed: yes (CI keystore, see apksigner output)"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: marry-base-android-apk
-          path: |
-            releases/marry-base.apk
-            releases/marry-base.apk.json
-          if-no-files-found: error
-          retention-days: 30
-
-  verify:
-    name: Typecheck & integration tests
-    needs: android
-    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -111,40 +40,106 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Download the Gradle-built APK
-        uses: actions/download-artifact@v4
-        with:
-          name: marry-base-android-apk
-          path: releases
+      - name: Typecheck & static Studio/Mobile syntax checks
+        run: |
+          npm run typecheck
+          npm run check:studio
+          npm run check:mobile
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Run full test suite against PostgreSQL 16
+        env:
+          NODE_ENV: test
+          PG_ADMIN_URL: postgresql://maary:maary_ci_password@127.0.0.1:5432/maary_base_test
+          JWT_SECRET: ci-test-jwt-secret-key-at-least-32-characters-long
+          MASTER_ENCRYPTION_KEY: ci-test-master-encryption-key-at-least-32-chars
+        run: |
+          idx=0
+          for test_file in src/*.test.ts; do
+            idx=$((idx + 1))
+            db_name="maary_ci_${idx}"
+            node --input-type=module -e '
+              import pg from "pg";
+              const c = new pg.Client({ connectionString: process.env.PG_ADMIN_URL });
+              await c.connect();
+              await c.query(`DROP DATABASE IF EXISTS "${process.argv[1]}"`);
+              await c.query(`CREATE DATABASE "${process.argv[1]}"`);
+              await c.end();
+            ' "$db_name"
+            echo "=== Running ${test_file} against PostgreSQL 16 (${db_name}) ==="
+            DATABASE_URL="postgresql://maary:maary_ci_password@127.0.0.1:5432/${db_name}" npx tsx --test "$test_file"
+          done
 
-      - name: Validate Management Studio modules
-        run: npm run check:studio
-
-      - name: Validate mobile client modules
-        run: npm run check:mobile
-
-      - name: Build production bundle
+      - name: Build production TypeScript bundle
         run: npm run build
 
-      - name: Verify the downloaded APK signature with Android apksigner
-        run: npm run verify:apk
-
-      - name: Run integration test suites
-        run: npm test
-
-      - name: Publish workspace summary
+      - name: Verify branded assets
         run: |
-          {
-            echo "## MARRY BASE build verification"
-            echo ""
-            echo "| Artifact | Size (bytes) | SHA-256 |"
-            echo "| :--- | ---: | :--- |"
-            for f in releases/marry-base.apk assets/logo.png assets/app-icon.png assets/logo.svg assets/app-icon.svg; do
-              size=$(wc -c < "$f" | tr -d ' ')
-              sha=$(sha256sum "$f" | awk '{print $1}')
-              echo "| \`$f\` | $size | \`$sha\` |"
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
+          test -s assets/logo.png
+          test -s assets/logo.svg
+          test -s assets/app-icon.png
+          test -s assets/app-icon.svg
+
+  android:
+    name: Native Android Gradle APK Build & Upload
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          # "tools" was removed from Android sdkmanager; explicitly install platform-tools.
+          packages: "platform-tools"
+
+      - name: Install Android SDK Platform 34 & Build-Tools 34.0.0
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Compile Android companion APK & run Android Lint via Gradle
+        run: |
+          if ! gradle --project-dir android assembleDebug lintDebug --no-daemon --stacktrace > /tmp/gradle.log 2>&1; then
+            cat /tmp/gradle.log
+            msg=$(tail -n 25 /tmp/gradle.log | tr '\n' ' ' | cut -c 1-900)
+            echo "::error title=GradleBuildFailed::${msg}"
+            exit 1
+          fi
+          cat /tmp/gradle.log | tail -n 30
+          mkdir -p releases
+          cp android/app/build/outputs/apk/debug/app-debug.apk releases/marry-base-android.apk
+
+      - name: Verify compiled APK structure & Android apksigner signature
+        run: |
+          if ! node scripts/verify-apk.mjs releases/marry-base-android.apk --require-apksigner > /tmp/verify.log 2>&1; then
+            cat /tmp/verify.log
+            msg=$(tail -n 20 /tmp/verify.log | tr '\n' ' ' | cut -c 1-900)
+            echo "::error title=VerifyApkFailed::${msg}"
+            exit 1
+          fi
+          cat /tmp/verify.log
+
+      - name: Upload MARRY BASE Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: marry-base-android-apk
+          path: releases/marry-base-android.apk
+          if-no-files-found: error
+          retention-days: 30

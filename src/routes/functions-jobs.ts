@@ -18,6 +18,7 @@ import {
   listSchedules,
   listServerFunctions,
   processDueBackgroundJobs,
+  retryBackgroundJob,
   upsertSchedule,
 } from "../services/functions-jobs.service.js";
 
@@ -231,6 +232,20 @@ export async function registerFunctionsAndJobsRoutes(
       ["owner", "admin", "developer"]
     );
     const job = await cancelBackgroundJob(project.id, jobId);
+    return { job };
+  });
+
+  app.post("/v1/projects/:projectRef/jobs/:jobId/retry", async (request) => {
+    const { projectRef, jobId } = request.params as {
+      projectRef: string;
+      jobId: string;
+    };
+    const { project } = await requireProjectControlAccess(
+      request,
+      projectRef,
+      ["owner", "admin", "developer"]
+    );
+    const job = await retryBackgroundJob(project.id, jobId);
     return { job };
   });
 

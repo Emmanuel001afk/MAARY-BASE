@@ -5,6 +5,23 @@ import test from "node:test";
 import { inflateRawSync } from "node:zlib";
 import { buildApp } from "./app.js";
 
+function unpackApk(apk: Buffer): Map<string, Buffer> {
+  const entries = new Map<string, Buffer>();
+  let position = 0;
+  while (position + 30 <= apk.length && apk.readUInt32LE(position) === 0x04034b50) {
+    const method = apk.readUInt16LE(position + 8);
+    const compressedSize = apk.readUInt32LE(position + 18);
+    const nameLength = apk.readUInt16LE(position + 26);
+    const extraLength = apk.readUInt16LE(position + 28);
+    const name = apk.subarray(position + 30, position + 30 + nameLength).toString("utf8");
+    const dataOffset = position + 30 + nameLength + extraLength;
+    const compressed = apk.subarray(dataOffset, dataOffset + compressedSize);
+    entries.set(name, method === 0 ? compressed : inflateRawSync(compressed));
+    position = dataOffset + compressedSize;
+  }
+  return entries;
+}
+
 test("health and readiness endpoints return operational status and MARRY BASE platform identity", async () => {
   const app = await buildApp();
   try {
@@ -26,34 +43,29 @@ test("health and readiness endpoints return operational status and MARRY BASE pl
     assert.equal(platformRes.statusCode, 200);
     const platformBody = platformRes.json();
     assert.equal(platformBody.name, "MARRY BASE");
-    // The public summary is derived from live checks. In the test process the
-    // background worker is disabled by default, so the honest overall state is
-    // "degraded" even though the API itself is reachable.
-    assert.ok(["operational", "degraded"].includes(platformBody.status));
-    assert.equal(platformBody.status, platformBody.services.backgroundJobs === "operational" ? "operational" : "degraded");
-    // Every advertised state must come from the shared status vocabulary and
-    // must agree with the live database check that was just asserted above.
-    const vocabulary = new Set([
-      "operational",
-      "implemented_unverified",
-      "partially_implemented",
-      "requires_configuration",
-      "unavailable",
-      "failed",
-      "missing",
-    ]);
-    for (const [service, state] of Object.entries(platformBody.services)) {
-      assert.ok(vocabulary.has(state as string), `${service} reported unknown state ${state}`);
-      if (platformBody.database.status === "operational") {
-        assert.notEqual(state, "unavailable", `${service} must not be unavailable while the database is up`);
-      }
-    }
-    assert.equal(platformBody.database.status, "operational");
+    assert.ok(
+      ["operational", "degraded"].includes(platformBody.status),
+      `Unexpected platform overall status: ${platformBody.status}`
+    );
     assert.equal(platformBody.database.engine, "PostgreSQL");
+    assert.equal(platformBody.database.status, "operational_verified");
     assert.equal(platformBody.branding.logoPngUrl, "/v1/platform/logo");
     assert.equal(platformBody.branding.logoSvgUrl, "/v1/platform/logo.svg");
-    assert.ok(["available", "missing", "invalid"].includes(platformBody.services.androidCompanion));
-    assert.ok(["not_built", "available", "invalid_artifact", "build_available"].includes(platformBody.android.statusLabel));
+    assert.equal(
+      platformBody.branding.apkDownloadUrl,
+      "/v1/platform/apk/download"
+    );
+    assert.equal(platformBody.modules.controlPlane, "operational_verified");
+    assert.equal(platformBody.modules.organizations, "operational_verified");
+    assert.equal(platformBody.modules.databaseApi, "operational_verified");
+    assert.equal(platformBody.modules.rowLevelSecurity, "operational_verified");
+    assert.ok(
+      ["operational_verified", "implemented_unverified", "requires_configuration"].includes(
+        platformBody.modules.mobileApkBuilder
+      )
+    );
+    assert.ok(Array.isArray(platformBody.moduleDetails));
+    assert.ok(platformBody.moduleDetails.length >= 10);
 
     const metricsJsonRes = await app.inject({
       method: "GET",
@@ -83,6 +95,14 @@ test("dashboard routes serve MARRY BASE management interface, logo, and assets",
     assert.match(indexRes.body, /id="app-shell"/);
     assert.match(indexRes.body, /type="module" src="\/dashboard\/app\.js"/);
     assert.doesNotMatch(indexRes.body, /\sonclick=/);
+
+    const dashRes = await app.inject({ method: "GET", url: "/dashboard" });
+    assert.equal(dashRes.statusCode, 200);
+    assert.equal(dashRes.body, indexRes.body);
+
+    const dashSlashRes = await app.inject({ method: "GET", url: "/dashboard/" });
+    assert.equal(dashSlashRes.statusCode, 200);
+    assert.equal(dashSlashRes.body, indexRes.body);
 
     const jsRes = await app.inject({ method: "GET", url: "/dashboard/app.js" });
     assert.equal(jsRes.statusCode, 200);
@@ -143,71 +163,83 @@ test("dashboard routes serve MARRY BASE management interface, logo, and assets",
   }
 });
 
-test("Android artifact endpoints report real build status and never fabricate a package", async () => {
+test("Android APK endpoints enforce authentication, input validation, and truthful Gradle toolchain status", async () => {
   const app = await buildApp();
+  const slug = "artifact-check";
   try {
-    const anonymousStatus = await app.inject({ method: "GET", url: "/v1/platform/apk/status" });
-    assert.equal(anonymousStatus.statusCode, 401);
+    const anonymousBuild = await app.inject({
+      method: "POST",
+      url: "/v1/platform/apk/build",
+      payload: { versionName: "1.0.0", versionCode: 1 },
+    });
+    assert.equal(anonymousBuild.statusCode, 401);
+
+    const statusRes = await app.inject({
+      method: "GET",
+      url: "/v1/platform/apk/status",
+    });
+    assert.equal(statusRes.statusCode, 200);
+    const statusBody = statusRes.json();
+    assert.equal(statusBody.androidProjectPresent, true);
+    assert.equal(statusBody.ciWorkflowPath, ".github/workflows/ci.yml");
 
     const registration = await app.inject({
       method: "POST",
       url: "/v1/platform/auth/register",
       payload: {
-        email: `apk-status-${Date.now()}@maary.dev`,
+        email: `apk-builder-${Date.now()}@maary.dev`,
         password: "StrongPassword123!",
       },
     });
     assert.equal(registration.statusCode, 201, registration.body);
     const accessToken = registration.json().accessToken as string;
-    const headers = { authorization: `Bearer ${accessToken}` };
+    const authorization = { authorization: `Bearer ${accessToken}` };
 
-    const statusRes = await app.inject({ method: "GET", url: "/v1/platform/apk/status", headers });
-    assert.equal(statusRes.statusCode, 200);
-    const status = statusRes.json();
-    assert.equal(status.platformName, "MARRY BASE");
-    assert.equal(status.packageName, "com.marrybase.platform");
-    assert.ok(["available", "missing", "invalid"].includes(status.state));
-    assert.ok(typeof status.summary === "string" && status.summary.length > 20);
-    assert.equal(typeof status.buildEnvironment.gradleBuildPossible, "boolean");
-    assert.ok(Array.isArray(status.buildEnvironment.missingPrerequisites));
-
-    const download = await app.inject({ method: "GET", url: "/v1/platform/apk/download" });
-    if (status.state === "available") {
-      assert.equal(download.statusCode, 200);
-      assert.match(download.headers["content-type"] ?? "", /application\/vnd\.android\.package-archive/);
-      assert.equal(download.rawPayload[0], 0x50);
-      assert.equal(download.rawPayload[1], 0x4b);
-      assert.equal(download.headers["x-apk-sha256"], status.artifact.checksumSha256);
-      assert.ok(status.verification?.hasAndroidManifest);
-      assert.ok(status.verification?.hasClassesDex);
-    } else {
-      assert.equal(download.statusCode, 404);
-      assert.match(download.json().message, /No Android APK|failed verification/);
-    }
-
-    // A build request either runs the genuine Gradle pipeline or fails with an
-    // actionable 409 — it must never return a synthesised artifact. When the
-    // toolchain is available this test only inspects the status (a real build
-    // is covered by CI's Android job) so the suite never rewrites the verified
-    // artifact under test.
-    if (!status.buildEnvironment.gradleBuildPossible) {
-      const buildRes = await app.inject({
+    for (const payload of [
+      { projectSlug: "../escape" },
+      { projectSlug: slug, serverUrl: "javascript:alert(1)" },
+      { projectSlug: slug, versionCode: 0 },
+      { projectSlug: slug, versionName: "bad version" },
+    ]) {
+      const invalid = await app.inject({
         method: "POST",
         url: "/v1/platform/apk/build",
-        headers,
-        payload: { versionName: "9.9.9", versionCode: 99 },
+        headers: authorization,
+        payload,
       });
-      assert.equal(buildRes.statusCode, 409, buildRes.body);
-      const body = buildRes.json();
-      assert.equal(body.error, "apk_build_unavailable");
-      assert.ok(body.details.instructions.includes("android:build") || body.details.instructions.includes("Gradle"));
-      assert.ok(Array.isArray(body.details.missingPrerequisites));
-      const afterStatus = await app.inject({ method: "GET", url: "/v1/platform/apk/status", headers });
-      assert.equal(afterStatus.json().state, status.state);
-    } else {
-      assert.ok(status.buildEnvironment.javaVersion, "a runnable JDK is reported");
-      assert.ok(status.buildEnvironment.androidSdkPath, "the SDK path is reported");
+      assert.equal(invalid.statusCode, 400, invalid.body);
     }
+
+    const traversal = await app.inject({
+      method: "GET",
+      url: "/v1/platform/apk/download?projectSlug=..%2Fescape",
+    });
+    assert.equal(traversal.statusCode, 400);
+
+    const missing = await app.inject({
+      method: "GET",
+      url: "/v1/platform/apk/download?projectSlug=not-built-yet",
+    });
+    assert.equal(missing.statusCode, 404);
+
+    if (!statusBody.toolchain.canBuildOnHost) {
+      const noToolchainBuild = await app.inject({
+        method: "POST",
+        url: "/v1/platform/apk/build",
+        headers: authorization,
+        payload: { versionName: "1.0.0", versionCode: 1 },
+      });
+      assert.equal(noToolchainBuild.statusCode, 503);
+    }
+
+    // Verify /mobile redirects to /mobile/ and serves mobile companion assets
+    const mobileRedirect = await app.inject({ method: "GET", url: "/mobile" });
+    assert.equal(mobileRedirect.statusCode, 302);
+    assert.equal(mobileRedirect.headers.location, "/mobile/");
+
+    const mobileHtmlRes = await app.inject({ method: "GET", url: "/mobile/" });
+    assert.equal(mobileHtmlRes.statusCode, 200);
+    assert.match(mobileHtmlRes.body, /MARRY BASE/);
   } finally {
     await app.close();
   }

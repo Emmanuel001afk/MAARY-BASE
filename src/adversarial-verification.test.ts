@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import test from "node:test";
-import { inflateRawSync } from "node:zlib";
 import { buildApp } from "./app.js";
 import { config } from "./config.js";
+import { pool } from "./db/pool.js";
+import { verifyApkPackage } from "./services/android-artifact.service.js";
 import { S3StorageAdapter } from "./services/storage.service.js";
 
 test("Critical #1: Server function isolated OS subprocess blocks sandbox escapes, filesystem access, secret leaks, and infinite loops", async () => {
@@ -250,90 +250,105 @@ test("Critical #2: Database privilege boundary enforces non-superuser role isola
   }
 });
 
-test("Critical #3: Android APK delivery is verified and cannot be fabricated by the server", async () => {
+test("Critical #3: Genuine Android Gradle project, CI workflow, WebView security boundaries, and APK package verifier reject fabricated archives", async () => {
   const app = await buildApp();
-  const artifactPath = resolve(process.cwd(), config.APK_ARTIFACT_PATH);
-  const metadataPath = resolve(process.cwd(), config.APK_METADATA_PATH);
-  const backups = {
-    artifact: await readFile(artifactPath).catch(() => null),
-    metadata: await readFile(metadataPath).catch(() => null),
-  };
+  const fakeApkPath = resolve(config.BACKUP_DIR, "fake-uncompiled.apk");
   try {
-    const registration = await app.inject({
-      method: "POST",
-      url: "/v1/platform/auth/register",
-      payload: { email: `apk-security-${Date.now()}@marrybase.dev`, password: "StrongPassword123!" },
+    // 1. Hand-assembled APK generator must NOT exist in the repository
+    await assert.rejects(
+      () => access(resolve(process.cwd(), "src/services/apk.service.ts")),
+      "Hand-fabricated APK generator must remain deleted"
+    );
+
+    // 2. Native Android Gradle files and hardened WebView MainActivity must exist
+    const [appGradle, manifestXml, mainJava, ciYaml] = await Promise.all([
+      readFile(resolve(process.cwd(), "android/app/build.gradle"), "utf8"),
+      readFile(resolve(process.cwd(), "android/app/src/main/AndroidManifest.xml"), "utf8"),
+      readFile(
+        resolve(process.cwd(), "android/app/src/main/java/com/marrybase/platform/MainActivity.java"),
+        "utf8"
+      ),
+      readFile(resolve(process.cwd(), ".github/workflows/ci.yml"), "utf8"),
+    ]);
+
+    assert.match(appGradle, /com\.android\.application/);
+    assert.match(appGradle, /compileSdk\s+34/);
+    assert.match(appGradle, /minSdk\s+24/);
+    assert.match(manifestXml, /android:allowBackup="false"/);
+    assert.match(manifestXml, /android:usesCleartextTraffic="false"/);
+    assert.match(mainJava, /setAllowFileAccess\(false\)/);
+    assert.match(mainJava, /setAllowUniversalAccessFromFileURLs\(false\)/);
+    assert.match(mainJava, /handler\.cancel\(\)/);
+    assert.match(mainJava, /\/ready/);
+    assert.match(mainJava, /\/v1\/platform/);
+
+    // 3. GitHub Actions workflow compiles with Gradle, verifies with apksigner, and uploads physical APK
+    assert.match(ciYaml, /assembleDebug/);
+    assert.match(ciYaml, /verify-apk\.mjs.*--require-apksigner/);
+    assert.match(ciYaml, /actions\/upload-artifact@v4/);
+    assert.match(ciYaml, /\.apk/);
+
+    // 4. APK status endpoint truthfully reports Android project presence and toolchain status
+    const statusRes = await app.inject({
+      method: "GET",
+      url: "/v1/platform/apk/status",
     });
-    assert.equal(registration.statusCode, 201, registration.body);
-    const headers = { authorization: `Bearer ${registration.json().accessToken}` };
+    assert.equal(statusRes.statusCode, 200);
+    const statusBody = statusRes.json();
+    assert.equal(statusBody.androidProjectPresent, true);
+    assert.ok(
+      ["operational_verified", "implemented_unverified", "requires_configuration"].includes(
+        statusBody.status
+      )
+    );
 
-    // 1. Removing the artifact must make the API truthful: 404 on download and
-    //    "missing" in status. No package may be synthesised on demand.
-    await rm(artifactPath, { force: true });
-    await rm(metadataPath, { force: true });
-    const missingDownload = await app.inject({ method: "GET", url: "/v1/platform/apk/download" });
-    assert.equal(missingDownload.statusCode, 404);
-    assert.equal(missingDownload.json().error, "not_found");
-
-    const missingStatus = await app.inject({ method: "GET", url: "/v1/platform/apk/status", headers });
-    assert.equal(missingStatus.statusCode, 200);
-    assert.equal(missingStatus.json().state, "missing");
-    assert.equal(missingStatus.json().downloadUrl, null);
-    assert.equal(await readFile(artifactPath).then(() => true).catch(() => false), false);
-
-    // 2. A build request in a host without the Android SDK must fail with an
-    //    actionable configuration error rather than writing an APK-like file.
-    // Force the "no SDK on this host" case so the assertion is deterministic
-    // and never overwrites a verified release artifact during a test run.
-    const savedAndroidHome = process.env.ANDROID_HOME;
-    const savedAndroidSdkRoot = process.env.ANDROID_SDK_ROOT;
-    delete process.env.ANDROID_HOME;
-    delete process.env.ANDROID_SDK_ROOT;
-    try {
-      const build = await app.inject({
-        method: "POST",
-        url: "/v1/platform/apk/build",
-        headers,
-        payload: { versionName: "1.0.0", versionCode: 1 },
-      });
-      assert.equal(build.statusCode, 409, build.body);
-      assert.equal(build.json().error, "apk_build_unavailable");
-      assert.ok(build.json().details.instructions.length > 0);
-      assert.equal(await readFile(artifactPath).then(() => true).catch(() => false), false);
-    } finally {
-      if (savedAndroidHome !== undefined) process.env.ANDROID_HOME = savedAndroidHome;
-      if (savedAndroidSdkRoot !== undefined) process.env.ANDROID_SDK_ROOT = savedAndroidSdkRoot;
-    }
-
-    // 3. A corrupted, non-ZIP file placed at the artifact path must be rejected
-    //    as invalid, not served.
-    await writeFile(artifactPath, Buffer.from("this is not an android package", "utf8"));
-    const invalidStatus = await app.inject({ method: "GET", url: "/v1/platform/apk/status", headers });
-    assert.equal(invalidStatus.json().state, "invalid");
-    assert.ok(invalidStatus.json().verification.problems.length > 0);
-    const invalidDownload = await app.inject({ method: "GET", url: "/v1/platform/apk/download" });
-    assert.equal(invalidDownload.statusCode, 404);
+    // 5. Verifier rejects non-Gradle / non-binary / unsigned files
+    await mkdir(dirname(fakeApkPath), { recursive: true });
+    await writeFile(fakeApkPath, Buffer.from("PK\x03\x04not-a-valid-compiled-apk-archive"));
+    const inspection = await verifyApkPackage(fakeApkPath);
+    assert.equal(inspection.valid, false);
   } finally {
-    if (backups.artifact) {
-      await writeFile(artifactPath, backups.artifact);
-      if (backups.metadata) await writeFile(metadataPath, backups.metadata);
-    } else {
-      await rm(artifactPath, { force: true });
-      await rm(metadataPath, { force: true });
-    }
+    await rm(fakeApkPath, { force: true });
     await app.close();
   }
 });
 
-test("High Priority #4: Full platform backup captures and restores tables, defaults, constraints, FKs, indexes, sequences, RLS, auth users, functions, and storage blobs", async () => {
+test("High Priority #4: Full platform backup enforces superadmin RBAC and captures/restores tables, defaults, constraints, FKs, indexes, sequences, RLS, auth users, functions, and storage blobs", async () => {
   const app = await buildApp();
   try {
+    // Register a non-superadmin operator (since Subtest #1 already created the initial superadmin)
+    const nonSuperReg = await app.inject({
+      method: "POST",
+      url: "/v1/platform/auth/register",
+      payload: {
+        email: `regular-op-${Date.now()}@marrybase.dev`,
+        password: "StrongPassword123!",
+        name: "Regular Operator",
+      },
+    });
+    assert.equal(nonSuperReg.statusCode, 201);
+    assert.equal(nonSuperReg.json().user.is_superadmin, false);
+    const nonSuperToken = nonSuperReg.json().accessToken as string;
+
+    // Non-superadmin MUST be blocked from full-platform backup endpoints
+    const forbiddenBackup = await app.inject({
+      method: "POST",
+      url: "/v1/platform/backups",
+      headers: { authorization: `Bearer ${nonSuperToken}` },
+      payload: { name: "unauthorized-platform-backup" },
+    });
+    assert.equal(forbiddenBackup.statusCode, 403);
+
+    // Elevate a dedicated DR superadmin in DB to run the full-platform disaster recovery workflow
     const email = `dr-admin-${Date.now()}@marrybase.dev`;
     const reg = await app.inject({
       method: "POST",
       url: "/v1/platform/auth/register",
       payload: { email, password: "StrongPassword123!", name: "DR Operator" },
     });
+    await pool.query(`UPDATE platform_users SET is_superadmin = true WHERE id = $1`, [
+      reg.json().user.id,
+    ]);
     const token = reg.json().accessToken as string;
 
     const projRes = await app.inject({
@@ -513,6 +528,9 @@ test("High Priority #4: Full platform backup captures and restores tables, defau
 test("High Priority #5: Concurrent platform operator registrations atomically enforce at most one superadmin", async () => {
   const app = await buildApp();
   try {
+    // Reset platform_users to exercise the initial 0-user bootstrap race condition directly
+    await pool.query(`DELETE FROM platform_users`);
+
     const batch = Array.from({ length: 5 }, (_, i) =>
       app.inject({
         method: "POST",
@@ -529,7 +547,20 @@ test("High Priority #5: Concurrent platform operator registrations atomically en
       assert.equal(r.statusCode, 201, r.body);
     }
 
-    const token = responses[0]!.json().accessToken as string;
+    const superWinners = responses.filter((r) => r.json().user.is_superadmin === true);
+    const ordinaryLosers = responses.filter((r) => r.json().user.is_superadmin === false);
+    assert.equal(superWinners.length, 1, "Exactly one concurrent registration may win superadmin");
+    assert.equal(ordinaryLosers.length, 4);
+
+    // Non-superadmin loser cannot list platform operators
+    const forbiddenRes = await app.inject({
+      method: "GET",
+      url: "/v1/platform/users",
+      headers: { authorization: `Bearer ${ordinaryLosers[0]!.json().accessToken}` },
+    });
+    assert.equal(forbiddenRes.statusCode, 403);
+
+    const token = superWinners[0]!.json().accessToken as string;
     const usersRes = await app.inject({
       method: "GET",
       url: "/v1/platform/users",

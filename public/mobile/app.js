@@ -3,7 +3,9 @@
 
   const config = window.__MARRY_BASE_CONFIG__ || {};
   const STORAGE_KEY = "marry-base.server-url";
-  const DEFAULT_URL = config.serverUrl || "http://10.0.2.2:4100";
+  const DEFAULT_URL = /^https?:/i.test(window.location.origin)
+    ? window.location.origin
+    : (config.serverUrl || "http://10.0.2.2:4000");
   const elements = {
     form: document.querySelector("#server-form"),
     input: document.querySelector("#server-url"),
@@ -39,14 +41,30 @@
     try { window.localStorage.setItem(STORAGE_KEY, value); } catch { /* Storage may be unavailable in privacy mode. */ }
   }
 
+  function isLocalOrLanHost(hostname) {
+    const h = String(hostname || "").toLowerCase();
+    return (
+      h === "localhost" ||
+      h === "127.0.0.1" ||
+      h === "10.0.2.2" ||
+      h.endsWith(".local") ||
+      /^10\.\d+\.\d+\.\d+$/.test(h) ||
+      /^192\.168\.\d+\.\d+$/.test(h) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(h)
+    );
+  }
+
   function normalizeUrl(value) {
     const input = String(value || "").trim();
     if (!input) throw new Error("Enter the URL of your MARRY BASE server.");
     const url = new URL(/^https?:\/\//i.test(input) ? input : `https://${input}`);
     if (!["http:", "https:"].includes(url.protocol)) throw new Error("Use an HTTP or HTTPS server URL.");
+    if (url.protocol === "http:" && !isLocalOrLanHost(url.hostname)) {
+      throw new Error("Remote servers must use HTTPS. Plain HTTP is restricted to localhost, emulator (10.0.2.2), or private LAN addresses.");
+    }
     if (url.username || url.password) throw new Error("Remove credentials from the URL. Sign in inside the Studio instead.");
     if (url.search || url.hash) throw new Error("Use the server address without a query string or fragment.");
-    url.pathname = url.pathname.replace(/\/+$/, "").replace(/\/dashboard$/, "");
+    url.pathname = url.pathname.replace(/\/+$/, "").replace(/\/(dashboard|mobile)$/, "");
     return url.toString().replace(/\/$/, "");
   }
 
@@ -126,17 +144,29 @@
     const timeout = window.setTimeout(() => controller.abort(), 10000);
 
     try {
-      const response = await fetch(endpoint("/ready"), {
-        method: "GET",
-        headers: { Accept: "application/json" },
-        cache: "no-store",
-        signal: controller.signal,
-      });
+      const [response, platformResp] = await Promise.all([
+        fetch(endpoint("/ready"), {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+          signal: controller.signal,
+        }),
+        fetch(endpoint("/v1/platform"), {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+          signal: controller.signal,
+        }),
+      ]);
       const payload = await response.json().catch(() => ({}));
+      const platformPayload = await platformResp.json().catch(() => ({}));
       const failedChecks = ["postgres", "migrations", "storage"]
         .filter((name) => payload.dependencies?.[name] !== "ok");
       if (!response.ok || payload.status !== "ready" || failedChecks.length > 0) {
         throw new Error(failedChecks.length ? `The server responded, but ${failedChecks.join(" and ")} is not ready.` : "This address did not return a ready MARRY BASE instance.");
+      }
+      if (!platformResp.ok || platformPayload.name !== "MARRY BASE") {
+        throw new Error("Endpoint responded to /ready, but /v1/platform did not identify as a MARRY BASE instance.");
       }
 
       connectedUrl = candidate;

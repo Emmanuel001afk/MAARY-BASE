@@ -151,6 +151,7 @@ class UnifiedDatabasePool {
         max: config.DATABASE_POOL_MAX,
         idleTimeoutMillis: 30_000,
         connectionTimeoutMillis: 5_000,
+        allowExitOnIdle: config.NODE_ENV === "test",
         application_name: "maary-base-api",
       });
       this.pgPool.on("error", (error) =>

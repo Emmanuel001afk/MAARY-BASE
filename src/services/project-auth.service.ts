@@ -1063,3 +1063,58 @@ export async function adminDeleteProjectUser(
     resourceId: userId,
   });
 }
+
+export interface ProjectAuthSessionView {
+  id: string;
+  project_id: string;
+  user_id: string;
+  email: string;
+  is_revoked: boolean;
+  user_agent: string | null;
+  ip_address: string | null;
+  expires_at: string;
+  created_at: string;
+}
+
+export async function adminListProjectSessions(
+  projectId: string,
+  limit = 100
+): Promise<ProjectAuthSessionView[]> {
+  const safeLimit = Math.min(Math.max(1, limit), 250);
+  const res = await pool.query<ProjectAuthSessionView>(
+    `SELECT s.id, s.project_id, s.user_id, u.email, s.is_revoked, s.user_agent, s.ip_address, s.expires_at, s.created_at
+     FROM project_auth_sessions s
+     JOIN project_auth_users u ON u.id = s.user_id
+     WHERE s.project_id = $1
+     ORDER BY s.created_at DESC
+     LIMIT $2`,
+    [projectId, safeLimit]
+  );
+  return res.rows;
+}
+
+export async function adminRevokeProjectSession(
+  projectId: string,
+  sessionId: string,
+  actorId?: string | null
+): Promise<void> {
+  const res = await pool.query(
+    `UPDATE project_auth_sessions
+     SET is_revoked = true
+     WHERE project_id = $1 AND id = $2
+     RETURNING id`,
+    [projectId, sessionId]
+  );
+  if (!res.rowCount) {
+    throw new NotFoundError("Session not found.");
+  }
+  await recordAuditEvent({
+    projectId,
+    actorType: actorId ? "user" : "service",
+    actorId: actorId ?? null,
+    action: "auth.admin.session_revoked",
+    resourceType: "project_session",
+    resourceId: sessionId,
+  });
+}
+

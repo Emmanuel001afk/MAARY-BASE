@@ -1,18 +1,22 @@
-import { existsSync } from "node:fs";
-import { access, constants, mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import os from "node:os";
 import { resolve } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { config } from "../config.js";
 import { getMigrationStatus } from "../db/migrate.js";
 import { pool } from "../db/pool.js";
 import { ValidationError } from "../lib/errors.js";
-import { config } from "../config.js";
-import { requirePlatformUser } from "../middleware/auth.middleware.js";
 import {
-  buildApkWithGradle,
-  getApkStatus,
-  loadApkForDownload,
-} from "../services/apk.service.js";
+  extractPlatformSessionId,
+  requirePlatformUser,
+  requireSuperadmin,
+} from "../middleware/auth.middleware.js";
+import {
+  buildAndroidApkWithGradle,
+  inspectAndroidEnvironment,
+  readVerifiedApkArtifact,
+} from "../services/android-artifact.service.js";
 import { listAuditEvents } from "../services/audit.service.js";
 import {
   createDatabaseBackup,
@@ -24,14 +28,23 @@ import {
   enableDatabaseExtension,
   listDatabaseExtensions,
 } from "../services/database.service.js";
+import {
+  evaluatePlatformModules,
+  listErrorLogs,
+} from "../services/diagnostics.service.js";
 import { workerSupervisor } from "../services/functions-jobs.service.js";
 import {
+  adminCreatePlatformUser,
+  adminUpdatePlatformUser,
+  changePlatformUserPassword,
   listPlatformUsers,
   loginPlatformUser,
   logoutPlatformSession,
   refreshPlatformSession,
   registerPlatformUser,
+  updatePlatformUserProfile,
 } from "../services/platform-auth.service.js";
+import { realtimeBroker } from "../services/realtime.service.js";
 
 const registerSchema = z.object({
   email: z.string().email(),
@@ -49,150 +62,55 @@ export async function registerPlatformRoutes(
 ): Promise<void> {
   app.get("/v1/platform", async () => {
     const poolStats = pool.getStats();
-    let databaseReachable = true;
     let migrationInfo = { appliedCount: 0, pendingCount: 0 };
     try {
-      await pool.query("SELECT 1");
       const mig = await getMigrationStatus();
       migrationInfo = {
         appliedCount: mig.applied.length,
         pendingCount: mig.pending.length,
       };
     } catch {
-      databaseReachable = false;
+      // Handled by evaluatePlatformModules
     }
 
-    const storageWritable = await (async () => {
-      try {
-        await mkdir(config.STORAGE_DIR, { recursive: true });
-        await access(config.STORAGE_DIR, constants.W_OK);
-        return true;
-      } catch {
-        return false;
-      }
-    })();
-
-    const workerRunning = workerSupervisor.isRunning();
-    const apk = await getApkStatus();
-
-    // Public service states are derived from the same control-plane data as the
-    // authenticated status page; nothing here is hard-coded to "operational".
-    const counts = await (async () => {
-      const result = {
-        projectTables: 0,
-        tablesWithoutRls: 0,
-        realtimeEvents: 0,
-        functionsDeployed: 0,
-        functionInvocations: 0,
-        backups: 0,
-        restoredBackups: 0,
-      };
-      if (!databaseReachable) return result;
-      try {
-        const [tables, unsecured, events, functions, invocations, backups, restored] = await Promise.all([
-          pool.query<{ count: string }>(
-            "SELECT COUNT(*)::text AS count FROM information_schema.tables WHERE table_schema LIKE 'proj\\_%' AND table_type = 'BASE TABLE'"
-          ),
-          pool.query<{ count: string }>(
-            "SELECT COUNT(*)::text AS count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname LIKE 'proj\\_%' AND c.relkind = 'r' AND NOT c.relrowsecurity"
-          ),
-          pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM platform_realtime_events"),
-          pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM platform_functions"),
-          pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM platform_function_logs"),
-          pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM platform_backups"),
-          pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM platform_backups WHERE restored_at IS NOT NULL"),
-        ]);
-        result.projectTables = Number(tables.rows[0]?.count ?? 0);
-        result.tablesWithoutRls = Number(unsecured.rows[0]?.count ?? 0);
-        result.realtimeEvents = Number(events.rows[0]?.count ?? 0);
-        result.functionsDeployed = Number(functions.rows[0]?.count ?? 0);
-        result.functionInvocations = Number(invocations.rows[0]?.count ?? 0);
-        result.backups = Number(backups.rows[0]?.count ?? 0);
-        result.restoredBackups = Number(restored.rows[0]?.count ?? 0);
-      } catch {
-        // Counts are best-effort; database health is already reported.
-      }
-      return result;
-    })();
-
-    const overallHealthy =
-      databaseReachable &&
-      migrationInfo.pendingCount === 0 &&
-      storageWritable &&
-      workerRunning;
+    const evaluation = await evaluatePlatformModules();
+    const m = evaluation.modules;
 
     return {
       name: "MARRY BASE",
       aliases: ["MAARY BASE"],
-      version: config.APP_VERSION,
-      commit: config.APP_COMMIT ?? process.env.GIT_COMMIT ?? null,
-      status: overallHealthy ? "operational" : "degraded",
-      statusDetail:
-        "Public health summary derived from live checks (database, migrations, storage, worker). Feature-level states reflect this instance's configuration; authenticated operators should use /v1/platform/status and /v1/projects/:ref/status for the full report.",
+      version: "1.0.0",
+      status: evaluation.overallStatus,
       branding: {
         logoPngUrl: "/v1/platform/logo",
         logoSvgUrl: "/v1/platform/logo.svg",
         appIconPngUrl: "/v1/platform/app-icon",
         appIconSvgUrl: "/v1/platform/app-icon.svg",
-        apkDownloadUrl: apk.state === "available" ? "/v1/platform/apk/download" : null,
+        apkDownloadUrl: "/v1/platform/apk/download",
+        apkStatusUrl: "/v1/platform/apk/status",
       },
       database: {
         engine: "PostgreSQL",
         mode: poolStats.mode,
-        status: databaseReachable ? "operational" : "unavailable",
+        status: m.database ?? "failed",
         migrations: migrationInfo,
       },
-      services: {
-        controlPlane: databaseReachable ? "operational" : "unavailable",
-        dataApi: databaseReachable ? "operational" : "unavailable",
-        authentication: databaseReachable ? "operational" : "unavailable",
-        rowLevelSecurity: !databaseReachable
-          ? "unavailable"
-          : counts.tablesWithoutRls > 0
-            ? "partially_implemented"
-            : "operational",
-        objectStorage: storageWritable ? "operational" : "requires_configuration",
-        realtime: !databaseReachable
-          ? "unavailable"
-          : counts.realtimeEvents > 0
-            ? "operational"
-            : "implemented_unverified",
-        serverFunctions: !databaseReachable
-          ? "unavailable"
-          : counts.functionsDeployed === 0
-            ? "requires_configuration"
-            : counts.functionInvocations > 0
-              ? "operational"
-              : "implemented_unverified",
-        backgroundJobs: workerRunning ? "operational" : "requires_configuration",
-        backupsAndRecovery: !storageWritable
-          ? "requires_configuration"
-          : counts.backups === 0
-            ? "requires_configuration"
-            : counts.restoredBackups > 0
-              ? "operational"
-              : "implemented_unverified",
-        managementStudio: existsSync(resolve(process.cwd(), "public", "dashboard", "index.html"))
-          ? "operational"
-          : "unavailable",
-        cliAndSdk: existsSync(resolve(process.cwd(), "src", "sdk", "index.ts")) ||
-          existsSync(resolve(process.cwd(), "dist", "sdk", "index.js"))
-          ? "operational"
-          : "unavailable",
-        androidCompanion: apk.state,
+      modules: {
+        controlPlane: m.platformAuth ?? "failed",
+        organizations: m.organizations ?? "failed",
+        databaseApi: m.dataApi ?? "failed",
+        authentication: m.projectAuth ?? "failed",
+        projectIsolation: m.projects ?? "failed",
+        rowLevelSecurity: m.dataApi ?? "failed",
+        objectStorage: m.storage ?? "failed",
+        realtime: m.realtime ?? "failed",
+        serverFunctions: m.functions ?? "failed",
+        backgroundJobs: m.backgroundJobs ?? "requires_configuration",
+        backupsAndRecovery: m.backups ?? "failed",
+        cliAndSdk: m.cli ?? "operational_verified",
+        mobileApkBuilder: m.mobileApkBuilder ?? "requires_configuration",
       },
-      android: {
-        state: apk.state,
-        statusLabel: apk.statusLabel,
-        summary: apk.summary,
-        buildEnvironment: apk.buildEnvironment,
-      },
-      endpoints: {
-        health: "/health",
-        readiness: "/ready",
-        metrics: "/v1/metrics",
-        status: "/v1/platform/status",
-      },
+      moduleDetails: evaluation.moduleDetails,
     };
   });
 
@@ -221,37 +139,61 @@ export async function registerPlatformRoutes(
     return reply.header("content-type", "image/svg+xml").send(buf);
   });
 
-  // Android Artifact Endpoints (real Gradle artifact; status is derived, never faked)
+  // Android Gradle APK Status, Build & Download Endpoints
   app.get("/v1/platform/apk/status", async (request) => {
-    await requirePlatformUser(request);
-    return getApkStatus();
+    const q = (request.query ?? {}) as { projectSlug?: string };
+    return inspectAndroidEnvironment(q.projectSlug);
   });
 
   app.post("/v1/platform/apk/build", async (request, reply) => {
     const user = await requirePlatformUser(request);
     const body = (request.body ?? {}) as {
+      projectSlug?: string;
+      serverUrl?: string;
       versionName?: string;
       versionCode?: number;
+      buildType?: "debug" | "release";
     };
-    const result = await buildApkWithGradle({
+    const apk = await buildAndroidApkWithGradle({
+      projectSlug: body.projectSlug,
+      serverUrl: body.serverUrl,
       versionName: body.versionName,
       versionCode: body.versionCode,
-      actorId: user?.id ?? null,
+      buildType: body.buildType,
+      actorId: user.id,
     });
-    const status = await getApkStatus();
-    return reply.code(201).send({ build: result, status });
+    return reply.code(201).send({ apk });
   });
 
   app.get("/v1/platform/apk/download", async (request, reply) => {
-    const { buffer, info } = await loadApkForDownload();
+    const q = (request.query ?? {}) as { projectSlug?: string };
+    const { inspection, buffer } = await readVerifiedApkArtifact(q.projectSlug);
     return reply
       .header("content-type", "application/vnd.android.package-archive")
-      .header("content-disposition", `attachment; filename="${info.fileName}"`)
-      .header("x-apk-sha256", info.checksumSha256 ?? "")
+      .header(
+        "content-disposition",
+        `attachment; filename="${inspection.fileName}"`
+      )
+      .header("x-apk-sha256", inspection.checksumSha256)
       .send(buffer);
   });
 
   // Platform Operator Auth
+  const buildSessionCookie = (token: string, maxAgeSeconds: number, isHttps: boolean) =>
+    `maary_platform_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${isHttps ? "; Secure" : ""}`;
+
+  app.get("/v1/platform/auth/status", async () => {
+    const countRes = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM platform_users`
+    );
+    const totalUsers = Number(countRes.rows[0]?.count ?? 0);
+    return {
+      bootstrapAvailable: totalUsers === 0,
+      bootstrapTokenRequired: totalUsers === 0 && config.NODE_ENV === "production",
+      totalOperators: totalUsers,
+    };
+  });
+
   app.post("/v1/platform/auth/register", async (request, reply) => {
     const parsed = registerSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -259,44 +201,81 @@ export async function registerPlatformRoutes(
         parsed.error.issues.map((i) => i.message).join("; ")
       );
     }
+    const bodyObj = (request.body ?? {}) as { bootstrapToken?: string };
     const bootstrapHeader = request.headers["x-platform-bootstrap-token"];
     const result = await registerPlatformUser({
       ...parsed.data,
-      bootstrapToken: typeof bootstrapHeader === "string" ? bootstrapHeader : undefined,
+      bootstrapToken:
+        typeof bootstrapHeader === "string"
+          ? bootstrapHeader
+          : bodyObj.bootstrapToken,
       ipAddress: request.ip,
       userAgent: request.headers["user-agent"],
     });
-    return reply.code(201).send(result);
+    const isHttps =
+      request.protocol === "https" ||
+      request.headers["x-forwarded-proto"] === "https";
+    return reply
+      .header(
+        "set-cookie",
+        buildSessionCookie(result.accessToken, result.expiresIn, isHttps)
+      )
+      .code(201)
+      .send(result);
   });
 
-  app.post("/v1/platform/auth/login", async (request) => {
+  app.post("/v1/platform/auth/login", async (request, reply) => {
     const parsed = loginSchema.safeParse(request.body);
     if (!parsed.success) {
       throw new ValidationError("Valid email and password are required.");
     }
-    return loginPlatformUser({
+    const result = await loginPlatformUser({
       ...parsed.data,
       ipAddress: request.ip,
       userAgent: request.headers["user-agent"],
     });
+    const isHttps =
+      request.protocol === "https" ||
+      request.headers["x-forwarded-proto"] === "https";
+    return reply
+      .header(
+        "set-cookie",
+        buildSessionCookie(result.accessToken, result.expiresIn, isHttps)
+      )
+      .send(result);
   });
 
-  app.post("/v1/platform/auth/refresh", async (request) => {
+  app.post("/v1/platform/auth/refresh", async (request, reply) => {
     const body = (request.body ?? {}) as { refreshToken?: string };
     if (!body.refreshToken) {
       throw new ValidationError("refreshToken is required.");
     }
-    return refreshPlatformSession(
+    const result = await refreshPlatformSession(
       body.refreshToken,
       request.ip,
       request.headers["user-agent"]
     );
+    const isHttps =
+      request.protocol === "https" ||
+      request.headers["x-forwarded-proto"] === "https";
+    return reply
+      .header(
+        "set-cookie",
+        buildSessionCookie(result.accessToken, result.expiresIn, isHttps)
+      )
+      .send(result);
   });
 
-  app.post("/v1/platform/auth/logout", async (request) => {
+  app.post("/v1/platform/auth/logout", async (request, reply) => {
     const user = await requirePlatformUser(request);
-    await logoutPlatformSession(user.id);
-    return { status: "logged_out" };
+    const sessionId = extractPlatformSessionId(request);
+    await logoutPlatformSession(user.id, sessionId);
+    const isHttps =
+      request.protocol === "https" ||
+      request.headers["x-forwarded-proto"] === "https";
+    return reply
+      .header("set-cookie", buildSessionCookie("", 0, isHttps))
+      .send({ status: "logged_out" });
   });
 
   app.get("/v1/platform/auth/me", async (request) => {
@@ -304,51 +283,184 @@ export async function registerPlatformRoutes(
     return { user };
   });
 
+  app.patch("/v1/platform/auth/me", async (request) => {
+    const user = await requirePlatformUser(request);
+    const body = (request.body ?? {}) as { name?: string };
+    const updated = await updatePlatformUserProfile(user.id, body);
+    return { user: updated };
+  });
+
+  app.post("/v1/platform/auth/change-password", async (request) => {
+    const user = await requirePlatformUser(request);
+    const body = (request.body ?? {}) as {
+      currentPassword?: string;
+      newPassword?: string;
+    };
+    if (!body.currentPassword || !body.newPassword) {
+      throw new ValidationError(
+        "Both 'currentPassword' and 'newPassword' are required."
+      );
+    }
+    await changePlatformUserPassword({
+      userId: user.id,
+      currentPassword: body.currentPassword,
+      newPassword: body.newPassword,
+      keepSessionId: extractPlatformSessionId(request),
+    });
+    return { passwordChanged: true };
+  });
+
+  // Platform Diagnostics (Runtime, Pool, Worker, Storage, Module Health)
+  app.get("/v1/platform/diagnostics", async (request) => {
+    const user = await requirePlatformUser(request);
+    const [evaluation, migrations, androidStatus] = await Promise.all([
+      evaluatePlatformModules(),
+      getMigrationStatus(),
+      inspectAndroidEnvironment(),
+    ]);
+    const mem = process.memoryUsage();
+    const poolStats = pool.getStats();
+
+    return {
+      version: "1.0.0",
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      environment: config.NODE_ENV,
+      uptimeSeconds: Math.floor(process.uptime()),
+      memory: {
+        rssBytes: mem.rss,
+        heapUsedBytes: mem.heapUsed,
+        heapTotalBytes: mem.heapTotal,
+        systemTotalBytes: os.totalmem(),
+        systemFreeBytes: os.freemem(),
+      },
+      database: {
+        ...poolStats,
+        statementTimeoutMs: config.STATEMENT_TIMEOUT_MS,
+        maxQueryRows: config.MAX_QUERY_ROWS,
+        migrations: {
+          applied: migrations.applied,
+          pending: migrations.pending,
+        },
+      },
+      storage: {
+        backend: config.STORAGE_BACKEND,
+        maxUploadBytes: config.MAX_UPLOAD_BYTES,
+        ...(user.is_superadmin
+          ? { storageDir: config.STORAGE_DIR, s3Bucket: config.S3_BUCKET ?? null }
+          : {}),
+      },
+      worker: {
+        ...workerSupervisor.getStats(),
+        pollIntervalMs: config.WORKER_POLL_INTERVAL_MS,
+        functionTimeoutMs: config.FUNCTION_TIMEOUT_MS,
+        webhookAllowPrivateNetworks: config.WEBHOOK_ALLOW_PRIVATE_NETWORKS,
+      },
+      realtime: realtimeBroker.getStats(),
+      android: androidStatus,
+      overallStatus: evaluation.overallStatus,
+      moduleDetails: evaluation.moduleDetails,
+    };
+  });
+
+  // Superadmin-Only Platform Administration Routes
   app.get("/v1/platform/users", async (request) => {
-    await requirePlatformUser(request);
+    await requireSuperadmin(request);
     const users = await listPlatformUsers();
     return { users };
   });
 
-  // Platform Audit Trail
+  app.post("/v1/platform/users", async (request, reply) => {
+    const admin = await requireSuperadmin(request);
+    const body = (request.body ?? {}) as {
+      email?: string;
+      password?: string;
+      name?: string;
+      isSuperadmin?: boolean;
+    };
+    if (!body.email || !body.password) {
+      throw new ValidationError("Operator 'email' and 'password' are required.");
+    }
+    const user = await adminCreatePlatformUser({
+      actorId: admin.id,
+      email: body.email,
+      password: body.password,
+      name: body.name,
+      isSuperadmin: body.isSuperadmin,
+    });
+    return reply.code(201).send({ user });
+  });
+
+  app.patch("/v1/platform/users/:userId", async (request) => {
+    const admin = await requireSuperadmin(request);
+    const { userId } = request.params as { userId: string };
+    const body = (request.body ?? {}) as {
+      name?: string;
+      status?: "active" | "suspended" | "disabled";
+      isSuperadmin?: boolean;
+      newPassword?: string;
+    };
+    const user = await adminUpdatePlatformUser({
+      actorId: admin.id,
+      targetUserId: userId,
+      name: body.name,
+      status: body.status,
+      isSuperadmin: body.isSuperadmin,
+      newPassword: body.newPassword,
+    });
+    return { user };
+  });
+
   app.get("/v1/platform/audit", async (request) => {
-    await requirePlatformUser(request);
+    await requireSuperadmin(request);
     const q = (request.query ?? {}) as Record<string, string | undefined>;
     return listAuditEvents({
       projectId: q.projectId,
       action: q.action,
       actorType: q.actorType,
       resourceType: q.resourceType,
-      limit: q.limit ? Number(q.limit) : 50,
+      limit: q.limit ? Number(q.limit) : 100,
       offset: q.offset ? Number(q.offset) : 0,
     });
   });
 
-  // PostgreSQL Extensions
+  app.get("/v1/platform/logs/errors", async (request) => {
+    await requireSuperadmin(request);
+    const q = (request.query ?? {}) as Record<string, string | undefined>;
+    const logs = await listErrorLogs({
+      projectId: q.projectId,
+      source: q.source,
+      severity: q.severity,
+      search: q.search,
+      limit: q.limit ? Number(q.limit) : 100,
+    });
+    return { logs };
+  });
+
   app.get("/v1/platform/extensions", async (request) => {
-    await requirePlatformUser(request);
+    await requireSuperadmin(request);
     const extensions = await listDatabaseExtensions();
     return { extensions };
   });
 
   app.post("/v1/platform/extensions", async (request) => {
-    const user = await requirePlatformUser(request);
+    const admin = await requireSuperadmin(request);
     const body = (request.body ?? {}) as { name?: string };
     if (!body.name) {
       throw new ValidationError("Extension name is required.");
     }
-    return enableDatabaseExtension(body.name, user.id);
+    return enableDatabaseExtension(body.name, admin.id);
   });
 
-  // Platform-wide Backups
   app.get("/v1/platform/backups", async (request) => {
-    await requirePlatformUser(request);
+    await requireSuperadmin(request);
     const backups = await listDatabaseBackups();
     return { backups };
   });
 
   app.post("/v1/platform/backups", async (request, reply) => {
-    const user = await requirePlatformUser(request);
+    const admin = await requireSuperadmin(request);
     const body = (request.body ?? {}) as {
       projectId?: string;
       name?: string;
@@ -356,20 +468,20 @@ export async function registerPlatformRoutes(
     const backup = await createDatabaseBackup({
       projectId: body.projectId,
       name: body.name,
-      actorId: user.id,
+      actorId: admin.id,
     });
     return reply.code(201).send({ backup });
   });
 
   app.post("/v1/platform/backups/:backupId/verify", async (request) => {
-    await requirePlatformUser(request);
+    await requireSuperadmin(request);
     const { backupId } = request.params as { backupId: string };
     return verifyBackupIntegrity(backupId);
   });
 
   app.post("/v1/platform/backups/:backupId/restore", async (request) => {
-    const user = await requirePlatformUser(request);
+    const admin = await requireSuperadmin(request);
     const { backupId } = request.params as { backupId: string };
-    return restoreDatabaseBackup(backupId, { actorId: user.id });
+    return restoreDatabaseBackup(backupId, { actorId: admin.id });
   });
 }

@@ -722,3 +722,7 @@ export function createMaaryClient(
     },
   };
 }
+
+export const createMarryBaseClient = createMaaryClient;
+
+
