@@ -320,8 +320,104 @@ public class MainActivity extends Activity {
 
         card.addView(actionRow, actionRowLp);
         outer.addView(card);
+
+        LinearLayout modulesCard = new LinearLayout(this);
+        modulesCard.setOrientation(LinearLayout.VERTICAL);
+        modulesCard.setPadding(dp(18), dp(18), dp(18), dp(18));
+        modulesCard.setBackground(roundedRect("#0E1722", "#243342", 16));
+        LinearLayout.LayoutParams modulesCardLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        modulesCardLp.topMargin = dp(14);
+
+        TextView modulesHeading = new TextView(this);
+        modulesHeading.setText("Inside Management Studio");
+        modulesHeading.setTextColor(Color.parseColor("#F3F7FA"));
+        modulesHeading.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        modulesHeading.setTypeface(Typeface.DEFAULT_BOLD);
+        modulesCard.addView(modulesHeading);
+
+        TextView modulesIntro = new TextView(this);
+        modulesIntro.setText("Tools available after you connect to your running MARI BASE server.");
+        modulesIntro.setTextColor(Color.parseColor("#91A4B7"));
+        modulesIntro.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        LinearLayout.LayoutParams modulesIntroLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        modulesIntroLp.topMargin = dp(4);
+        modulesIntroLp.bottomMargin = dp(12);
+        modulesCard.addView(modulesIntro, modulesIntroLp);
+
+        modulesCard.addView(createModuleRow(
+                "Database & SQL", "Tables, queries, migrations",
+                "Auth & users", "Accounts, roles, sessions"
+        ));
+        LinearLayout.LayoutParams rowTwoLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        rowTwoLp.topMargin = dp(8);
+        modulesCard.addView(createModuleRow(
+                "Storage", "Buckets and files",
+                "Realtime", "Live data and events"
+        ), rowTwoLp);
+        LinearLayout.LayoutParams rowThreeLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        rowThreeLp.topMargin = dp(8);
+        modulesCard.addView(createModuleRow(
+                "Functions & jobs", "Server tasks and queues",
+                "Backups & logs", "Recovery and diagnostics"
+        ), rowThreeLp);
+
+        outer.addView(modulesCard, modulesCardLp);
         scroll.addView(outer);
         return scroll;
+    }
+
+    private LinearLayout createModuleRow(String firstTitle, String firstDetail,
+                                         String secondTitle, String secondDetail) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(createModuleTile(firstTitle, firstDetail), new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+        ));
+        LinearLayout.LayoutParams secondLp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+        );
+        secondLp.leftMargin = dp(8);
+        row.addView(createModuleTile(secondTitle, secondDetail), secondLp);
+        return row;
+    }
+
+    private LinearLayout createModuleTile(String title, String detail) {
+        LinearLayout tile = new LinearLayout(this);
+        tile.setOrientation(LinearLayout.VERTICAL);
+        tile.setPadding(dp(10), dp(10), dp(10), dp(10));
+        tile.setBackground(roundedRect("#111F2D", "#263849", 10));
+
+        TextView titleView = new TextView(this);
+        titleView.setText(title);
+        titleView.setTextColor(Color.parseColor("#D9FBEA"));
+        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        titleView.setTypeface(Typeface.DEFAULT_BOLD);
+        tile.addView(titleView);
+
+        TextView detailView = new TextView(this);
+        detailView.setText(detail);
+        detailView.setTextColor(Color.parseColor("#8FA3B6"));
+        detailView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+        detailView.setLineSpacing(dp(1), 1f);
+        LinearLayout.LayoutParams detailViewLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        detailViewLp.topMargin = dp(4);
+        tile.addView(detailView, detailViewLp);
+        return tile;
     }
 
     @SuppressLint("SetJavaScriptEnabled")
