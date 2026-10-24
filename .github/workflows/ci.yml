@@ -175,36 +175,6 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::notice::CI-MARK verify-apk-done"
 
-      - name: APK signature forensics
-        if: always()
-        run: |
-          set -uo pipefail
-          APK="android/app/build/outputs/apk/debug/app-debug.apk"
-          if [ ! -s "$APK" ]; then
-            echo "::notice::forensics: no APK produced"
-            exit 0
-          fi
-          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-          BT=$(ls -d "$SDK"/build-tools/* 2>/dev/null | sort -V | tail -1)
-          echo "::notice::apksigner: $("$BT/apksigner" verify --verbose --print-certs "$APK" 2>&1 | tr '\n' '|')"
-          node -e '
-            const fs = require("fs");
-            const b = fs.readFileSync("android/app/build/outputs/apk/debug/app-debug.apk");
-            let eocd = -1;
-            for (let i = b.length - 22; i >= Math.max(0, b.length - 65557); i--) {
-              if (b.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
-            }
-            const cd = eocd >= 0 ? b.readUInt32LE(eocd + 16) : -1;
-            const count = eocd >= 0 ? b.readUInt16LE(eocd + 10) : -1;
-            const magic = Buffer.from("APK Sig Block 42", "ascii");
-            console.log("::notice::apk-structure: size=" + b.length + " eocd=" + eocd +
-              " cdOffset=" + cd + " entries=" + count +
-              " magicIndex=" + b.indexOf(magic) +
-              " magicAtCdMinus16=" + (cd > 16 && b.subarray(cd - 16, cd).equals(magic)) +
-              " tail64=" + b.subarray(Math.max(0, cd - 64), cd).toString("hex"));
-          '
-          echo "::notice::fingerprint: $(sha256sum "$APK" | awk '{print $1}')"
-
       - name: Mark artifact upload
         run: echo "::notice::CI-MARK upload-start"
 

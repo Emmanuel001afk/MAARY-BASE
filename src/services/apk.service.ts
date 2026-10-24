@@ -174,14 +174,25 @@ export function inspectApkBuffer(buffer: Buffer): {
     problems.push("No compiled resources are packaged.");
   }
 
-  // APK Signature Scheme v1 (JAR) evidence, and v2 block ("APK Sig Block 42")
-  // located immediately before the central directory.
+  // APK Signature Scheme v1 (JAR) evidence, and the v2/v3 signing block
+  // ("APK Sig Block 42") located immediately before the central directory.
+  //
+  // The block ends exactly where the central directory starts, so its footer
+  // (block size + magic) occupies [centralOffset - 16, centralOffset). Scanning
+  // backwards from a lower offset would never look at that position, which made
+  // every genuinely signed Gradle APK look unsigned.
   const sigBlockMagic = Buffer.from("APK Sig Block 42", "ascii");
-  const searchFloor = Math.max(0, centralOffset - 262_144);
-  for (let i = centralOffset - 20; i >= searchFloor; i--) {
-    if (buffer.subarray(i, i + 16).equals(sigBlockMagic)) {
-      hasApkSigningBlock = true;
-      break;
+  if (centralOffset >= 16 && buffer.subarray(centralOffset - 16, centralOffset).equals(sigBlockMagic)) {
+    hasApkSigningBlock = true;
+  } else {
+    // Tolerate tooling that pads between the signing block and the central
+    // directory by scanning the region immediately before it.
+    const searchFloor = Math.max(0, centralOffset - 262_144);
+    for (let i = centralOffset - 17; i >= searchFloor; i--) {
+      if (buffer.subarray(i, i + 16).equals(sigBlockMagic)) {
+        hasApkSigningBlock = true;
+        break;
+      }
     }
   }
   if (!hasApkSigningBlock && !entries.some((entry) => entry.startsWith("META-INF/") && /\.(RSA|DSA|EC)$/i.test(entry))) {
