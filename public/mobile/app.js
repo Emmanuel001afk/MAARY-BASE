@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const config = window.__MARRY_BASE_CONFIG__ || {};
+  const config = window.__MARI_BASE_CONFIG__ || {};
   const STORAGE_KEY = "marry-base.server-url";
   const DEFAULT_URL = /^https?:/i.test(window.location.origin)
     ? window.location.origin
@@ -56,7 +56,7 @@
 
   function normalizeUrl(value) {
     const input = String(value || "").trim();
-    if (!input) throw new Error("Enter the URL of your MARRY BASE server.");
+    if (!input) throw new Error("Enter the URL of your MARI BASE server.");
     const url = new URL(/^https?:\/\//i.test(input) ? input : `https://${input}`);
     if (!["http:", "https:"].includes(url.protocol)) throw new Error("Use an HTTP or HTTPS server URL.");
     if (url.protocol === "http:" && !isLocalOrLanHost(url.hostname)) {
@@ -163,10 +163,10 @@
       const failedChecks = ["postgres", "migrations", "storage"]
         .filter((name) => payload.dependencies?.[name] !== "ok");
       if (!response.ok || payload.status !== "ready" || failedChecks.length > 0) {
-        throw new Error(failedChecks.length ? `The server responded, but ${failedChecks.join(" and ")} is not ready.` : "This address did not return a ready MARRY BASE instance.");
+        throw new Error(failedChecks.length ? `The server responded, but ${failedChecks.join(" and ")} is not ready.` : "This address did not return a ready MARI BASE instance.");
       }
-      if (!platformResp.ok || platformPayload.name !== "MARRY BASE") {
-        throw new Error("Endpoint responded to /ready, but /v1/platform did not identify as a MARRY BASE instance.");
+      if (!platformResp.ok || platformPayload.name !== "MARI BASE") {
+        throw new Error("Endpoint responded to /ready, but /v1/platform did not identify as a MARI BASE instance.");
       }
 
       connectedUrl = candidate;
@@ -182,7 +182,7 @@
         ? "The connection timed out. Check the address, server, and network."
         : error.message || "The server could not be reached.";
       setStatus("error", "Unavailable", message);
-      showFormError("Check that MARRY BASE is running and reachable from this device. Connection help is below.");
+      showFormError("Check that MARI BASE is running and reachable from this device. Connection help is below.");
     } finally {
       window.clearTimeout(timeout);
       setBusy(false);
