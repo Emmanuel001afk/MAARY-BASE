@@ -36,6 +36,11 @@ jobs:
 
       - name: Build production bundle & Android APK
         run: npm run build
+        env:
+          APK_SIGNING_PRIVATE_KEY: ${{ secrets.APK_SIGNING_PRIVATE_KEY }}
+
+      - name: Verify APK with Android apksigner
+        run: npm run verify:apk
 
       - name: Run adversarial & integration test suites
         run: npm test

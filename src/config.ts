@@ -47,6 +47,17 @@ const schema = z.object({
     .string()
     .min(16)
     .default("maary-base-dev-encryption-master-key-change-in-prod-32b"),
+  APK_SIGNING_PRIVATE_KEY: z.string().optional(),
+  APK_SIGNING_KEY_FILE: z
+    .string()
+    .default(
+      join(
+        process.cwd(),
+        isTestRunner
+          ? "data/test-apk-signing/private-key.pem"
+          : "data/apk-signing/private-key.pem"
+      )
+    ),
   STORAGE_BACKEND: z.enum(["local", "s3"]).default("local"),
   STORAGE_DIR: z
     .string()
