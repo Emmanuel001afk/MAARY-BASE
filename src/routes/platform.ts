@@ -77,8 +77,8 @@ export async function registerPlatformRoutes(
     const m = evaluation.modules;
 
     return {
-      name: "MARRY BASE",
-      aliases: ["MAARY BASE"],
+      name: "MARI BASE",
+      aliases: ["MARI"],
       version: "1.0.0",
       status: evaluation.overallStatus,
       branding: {
