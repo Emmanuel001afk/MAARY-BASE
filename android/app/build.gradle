@@ -2,8 +2,8 @@ plugins {
     id "com.android.application"
 }
 
-def propVersionCode = (project.findProperty("marryBaseVersionCode") ?: "1").toInteger()
-def propVersionName = (project.findProperty("marryBaseVersionName") ?: "1.0.0").toString()
+def propVersionCode = (project.findProperty("marryBaseVersionCode") ?: "2").toInteger()
+def propVersionName = (project.findProperty("marryBaseVersionName") ?: "1.1.0").toString()
 def propServerUrl = (project.findProperty("marryBaseServerUrl") ?: "").toString()
 def propProjectSlug = (project.findProperty("marryBaseProjectSlug") ?: "").toString()
 
