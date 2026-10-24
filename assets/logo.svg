@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="MARRY BASE Official App Icon">
-  <title>MARRY BASE Official App Icon — Interlocking Union Rings (MARRY) on 3-Tier Isometric Database Pedestal (BASE)</title>
-  <desc>Two interlocking rings (Emerald Green and Radiant Gold) united by a central M monogram representing MARRY (the union of application and backend), resting upon a three-tier hexagonal obsidian-teal pedestal representing BASE (Database, Storage, and Security foundation).</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="MARI BASE Official App Icon">
+  <title>MARI BASE Official App Icon — Interlocking Union Rings (MARI) on 3-Tier Isometric Database Pedestal (BASE)</title>
+  <desc>Two interlocking rings (Emerald Green and Radiant Gold) united by a central M monogram representing MARI (the union of application and backend), resting upon a three-tier hexagonal obsidian-teal pedestal representing BASE (Database, Storage, and Security foundation).</desc>
   <defs>
     <linearGradient id="bgSquircle" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#162234" />
@@ -43,7 +43,7 @@
   <polygon points="82,156 108,144 148,144 174,156 148,170 108,170" fill="url(#baseTop)" stroke="#5eead4" stroke-width="2.2" />
   <polygon points="82,156 108,170 148,170 174,156 174,166 148,180 108,180 82,166" fill="url(#baseEdge)" />
 
-  <!-- MARRY: Two Interlocking Union Rings + Central 'M' Bridge -->
+  <!-- MARI: Two Interlocking Union Rings + Central 'M' Bridge -->
   <!-- Left Emerald Ring -->
   <circle cx="102" cy="104" r="46" fill="none" stroke="url(#emeraldRing)" stroke-width="14" />
   <!-- Right Gold Ring -->
