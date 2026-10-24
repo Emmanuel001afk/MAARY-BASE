@@ -116,10 +116,30 @@ jobs:
           [ -n "${BUILD_TOOLS:-}" ] && [ -d "$BUILD_TOOLS" ] || fail "No Android build-tools installed under $SDK/build-tools"
           echo "Using build-tools: $BUILD_TOOLS"
 
-          "$BUILD_TOOLS/aapt2" dump badging "$APK" > /tmp/badging.txt 2>/tmp/badging.err             || fail "aapt2 dump badging failed: $(tail -3 /tmp/badging.err | tr '\n' ' ')"
-          head -6 /tmp/badging.txt
-          grep -q "package: name='com.marrybase.platform'" /tmp/badging.txt             || fail "Unexpected package: $(grep -m1 '^package:' /tmp/badging.txt)"
-          grep -q "sdkVersion:'24'" /tmp/badging.txt             || fail "minSdk is not 24: $(grep -m1 'sdkVersion' /tmp/badging.txt)"
+          "$BUILD_TOOLS/aapt2" dump badging "$APK" > /tmp/badging.txt 2>/tmp/badging.err \
+            || fail "aapt2 dump badging failed: $(tail -3 /tmp/badging.err | tr '\n' ' ')"
+          echo "::notice::badging: $(head -12 /tmp/badging.txt | tr '\n' '|')"
+          grep -q "package: name='com.marrybase.platform'" /tmp/badging.txt \
+            || fail "Unexpected package: $(grep -m1 '^package:' /tmp/badging.txt)"
+
+          # minSdk is asserted against the compiled manifest, not against a
+          # human-readable format string: aapt2 build-tools versions differ in
+          # how (and whether) `dump badging` prints the SDK level.
+          MIN_SDK_OK=0
+          if grep -qE "^(sdkVersion|minSdkVersion):'24'" /tmp/badging.txt; then
+            MIN_SDK_OK=1
+          else
+            "$BUILD_TOOLS/aapt2" dump xmltree --file AndroidManifest.xml "$APK" > /tmp/xmltree.txt 2>&1 || true
+            if grep -q "minSdkVersion(0x0101020c)=(type 0x10)0x18" /tmp/xmltree.txt; then
+              MIN_SDK_OK=1
+            fi
+          fi
+          if [ "$MIN_SDK_OK" -ne 1 ]; then
+            grep -m3 -i "sdk" /tmp/xmltree.txt /tmp/badging.txt | while IFS= read -r line; do echo "::error::sdk-evidence: $line"; done
+            fail "The packaged manifest does not declare minSdkVersion 24"
+          fi
+          echo "::notice::minSdk 24 verified in the compiled manifest"
+
           echo "::notice::CI-MARK apk-badging-ok"
 
           if ! "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" > /tmp/signature.txt 2>&1; then
