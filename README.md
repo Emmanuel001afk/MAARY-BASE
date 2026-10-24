@@ -21,7 +21,7 @@
 | **Realtime Services** | Operational | Authenticated WebSocket server (`/v1/projects/:ref/realtime/ws`), automatic PostgreSQL row-change capture via `SECURITY DEFINER` triggers (`INSERT`, `UPDATE`, `DELETE`), channel broadcast, presence tracking, reconnection event replay via `lastEventId`. |
 | **Server Functions & Jobs** | Operational | Versioned JS functions executed in a sandboxed `node:vm` runtime with CPU timeouts, console log capture, encrypted secret injection, and project-scoped DB bridge; durable PostgreSQL background job queue with retries, exponential backoff, dead-letter state, idempotency keys, and recurring schedules. |
 | **Management Studio, CLI & SDK** | Operational | Responsive browser studio (`/` and `/dashboard`) with dark/light themes, automatic session renewal, safe escaped rendering, complete project workflows, realtime inspection, RBAC, backups, mobile navigation, and keyboard commands; CLI (`npm run cli -- ...`) and fluent TypeScript SDK (`createMaaryClient`). |
-| **Android APK Builder & Mobile** | Operational | Polished mobile connection hub, full in-app Management Studio, back-button navigation, generated per-project configuration, multi-density backend-themed icons, binary AXML/ARSC/DEX packaging, and RSA v1 JAR signing. Build with `npm run build:apk` or `POST /v1/platform/apk/build`; download with `GET /v1/platform/apk/download`. |
+| **Android APK Builder & Mobile** | Operational | Polished mobile connection hub, full in-app Management Studio, back-button navigation, generated per-project configuration, multi-density backend-themed icons, binary AXML/ARSC/DEX packaging, and persistent RSA v1 JAR + v2 whole-APK signing. Build with `npm run build:apk` or `POST /v1/platform/apk/build`; download with `GET /v1/platform/apk/download`. |
 | **Operations & Backups** | Operational | `/health`, `/ready`, `/v1/metrics` (JSON & Prometheus format), logical project/platform backups with SHA-256 integrity verification and transactional restoration. |
 
 ---
@@ -111,6 +111,25 @@ npm run build:apk
 ```
 
 Project downloads serve the exact artifact produced by the build. They do not rebuild with default settings, and project builds never replace the default `releases/marry-base.apk`. Mobile source lives in `public/mobile/`; the native source shell under `android/` and the generated DEX in `src/services/apk.service.ts` use the same local client and connection behavior.
+
+### Android signing and upgrade identity
+
+Every APK is signed with both APK Signature Scheme v2 (required by modern Android installers) and a v1/JAR signature. The first local build creates an RSA 2048-bit private key at `data/apk-signing/private-key.pem` with owner-only permissions and reuses it for subsequent builds. **Back up this key securely and never commit it**: losing or replacing it prevents Android from accepting later builds as updates to the same package.
+
+For managed/CI signing, set the `APK_SIGNING_PRIVATE_KEY` secret to a PKCS#8 PEM key, or set `APK_SIGNING_KEY_FILE` to a persistent key path. The optional CI secret is read only during the APK build step. Test builds use an isolated key under `data/test-apk-signing/`.
+
+Verify a built artifact with Android's own tooling:
+
+```bash
+# Uses apksigner from ANDROID_HOME/ANDROID_SDK_ROOT, apksigner from PATH,
+# or an explicit APKSIGNER executable path.
+npm run verify:apk
+
+# A local apksigner JAR is also supported.
+JAVA=/path/to/java APKSIGNER_JAR=/path/to/apksigner.jar npm run verify:apk
+```
+
+The verification command requires v2 at the application's real SDK range and separately checks the retained v1 signature. CI runs this gate after every APK build.
 
 ---
 

@@ -1,11 +1,15 @@
 import {
   createHash,
+  createPrivateKey,
+  createPublicKey,
   createSign,
   generateKeyPairSync,
+  type KeyObject,
 } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { deflateRawSync } from "node:zlib";
+import { config } from "../config.js";
 import { NotFoundError, ValidationError } from "../lib/errors.js";
 import { recordAuditEvent } from "./audit.service.js";
 
@@ -944,16 +948,60 @@ function derUtcTime(yyMMddHHmmssZ: string): Buffer {
   return derTag(0x17, Buffer.from(yyMMddHHmmssZ, "ascii"));
 }
 
+let cachedSigningKey: Promise<KeyObject> | null = null;
+
+function validateApkSigningKey(privateKey: KeyObject): KeyObject {
+  if (
+    privateKey.asymmetricKeyType !== "rsa" ||
+    (privateKey.asymmetricKeyDetails?.modulusLength ?? 0) < 2048
+  ) {
+    throw new Error("APK signing requires an RSA private key of at least 2048 bits");
+  }
+  return privateKey;
+}
+
+async function loadOrCreateApkSigningKey(): Promise<KeyObject> {
+  const keyFile = resolve(config.APK_SIGNING_KEY_FILE);
+  try {
+    return validateApkSigningKey(createPrivateKey(await readFile(keyFile, "utf8")));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pem = privateKey.export({ type: "pkcs8", format: "pem" });
+  await mkdir(dirname(keyFile), { recursive: true, mode: 0o700 });
+  try {
+    // Never overwrite an existing identity: another process may have created it.
+    await writeFile(keyFile, pem, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    return privateKey;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    return validateApkSigningKey(createPrivateKey(await readFile(keyFile, "utf8")));
+  }
+}
+
+async function getApkSigningKey(): Promise<KeyObject> {
+  if (config.APK_SIGNING_PRIVATE_KEY?.trim()) {
+    return validateApkSigningKey(createPrivateKey(config.APK_SIGNING_PRIVATE_KEY));
+  }
+  cachedSigningKey ??= loadOrCreateApkSigningKey();
+  return cachedSigningKey;
+}
+
 /**
  * Generates an APK v1 JAR signature (MANIFEST.MF, MARRYBAS.SF, and ASN.1 DER PKCS#7 CMS MARRYBAS.RSA
  * containing a valid X.509v3 certificate and RSA-SHA256 SignerInfo).
  */
 function buildApkSignatureFiles(
-  entries: Array<{ name: string; data: Buffer }>
+  entries: Array<{ name: string; data: Buffer }>,
+  privateKey: KeyObject
 ): {
   manifestMf: Buffer;
   signatureSf: Buffer;
   signatureRsa: Buffer;
+  certificateDer: Buffer;
+  publicKeyDer: Buffer;
 } {
   const mfLines: string[] = [
     "Manifest-Version: 1.0",
@@ -974,6 +1022,7 @@ function buildApkSignatureFiles(
   const sfLines: string[] = [
     "Signature-Version: 1.0",
     "Created-By: 1.0 (MARRY BASE Android Signer)",
+    "X-Android-APK-Signed: 2",
     `SHA-256-Digest-Manifest: ${fullMfDigest}`,
     "",
   ];
@@ -988,10 +1037,10 @@ function buildApkSignatureFiles(
   }
   const signatureSf = Buffer.from(sfLines.join("\r\n"), "utf8");
 
-  const { privateKey, publicKey } = generateKeyPairSync("rsa", {
-    modulusLength: 2048,
-  });
-  const spkiDer = publicKey.export({ type: "spki", format: "der" }) as Buffer;
+  const spkiDer = createPublicKey(privateKey).export({
+    type: "spki",
+    format: "der",
+  }) as Buffer;
 
   // Build X.509 TBSCertificate
   // OID sha256WithRSAEncryption = 1.2.840.113549.1.1.11 -> 2a864886f70d01010b
@@ -1070,7 +1119,13 @@ function buildApkSignatureFiles(
     derTag(0xa0, signedData)
   );
 
-  return { manifestMf, signatureSf, signatureRsa };
+  return {
+    manifestMf,
+    signatureSf,
+    signatureRsa,
+    certificateDer: x509CertDer,
+    publicKeyDer: spkiDer,
+  };
 }
 
 /**
@@ -1160,6 +1215,129 @@ function buildZipAlignedArchive(
   eocd.writeUInt16LE(0, 20);
 
   return Buffer.concat([...localParts, centralDir, eocd]);
+}
+
+const APK_SIG_V2_BLOCK_ID = 0x7109871a;
+const APK_SIG_RSA_PKCS1_SHA256 = 0x0103;
+const APK_SIG_BLOCK_MAGIC = Buffer.from("APK Sig Block 42", "ascii");
+const APK_DIGEST_CHUNK_SIZE = 1024 * 1024;
+
+function uint32Le(value: number): Buffer {
+  const buffer = Buffer.alloc(4);
+  buffer.writeUInt32LE(value >>> 0);
+  return buffer;
+}
+
+function uint64Le(value: number): Buffer {
+  const buffer = Buffer.alloc(8);
+  buffer.writeBigUInt64LE(BigInt(value));
+  return buffer;
+}
+
+function lengthPrefixed(data: Buffer): Buffer {
+  return Buffer.concat([uint32Le(data.length), data]);
+}
+
+function findZipEocd(apk: Buffer): number {
+  const minimum = Math.max(0, apk.length - 22 - 65_535);
+  for (let offset = apk.length - 22; offset >= minimum; offset -= 1) {
+    if (
+      apk.readUInt32LE(offset) === 0x06054b50 &&
+      offset + 22 + apk.readUInt16LE(offset + 20) === apk.length
+    ) {
+      return offset;
+    }
+  }
+  throw new Error("Cannot sign APK: ZIP End of Central Directory not found");
+}
+
+/**
+ * Adds APK Signature Scheme v2 while retaining the valid v1/JAR signature.
+ * Android 7.0+ verifies the whole APK through chunked content digests, which
+ * is required by modern installers for packages targeting recent Android APIs.
+ */
+function signApkV2(
+  apk: Buffer,
+  identity: { privateKey: KeyObject; certificateDer: Buffer; publicKeyDer: Buffer }
+): Buffer {
+  const eocdOffset = findZipEocd(apk);
+  const centralDirectoryOffset = apk.readUInt32LE(eocdOffset + 16);
+  const digestEocd = Buffer.from(apk.subarray(eocdOffset));
+  // The signing block changes this offset in the output, but the digest covers
+  // the EOCD as it existed before inserting that block.
+  digestEocd.writeUInt32LE(centralDirectoryOffset, 16);
+
+  const chunkDigests: Buffer[] = [];
+  for (const section of [
+    apk.subarray(0, centralDirectoryOffset),
+    apk.subarray(centralDirectoryOffset, eocdOffset),
+    digestEocd,
+  ]) {
+    for (let offset = 0; offset < section.length; offset += APK_DIGEST_CHUNK_SIZE) {
+      const chunk = section.subarray(offset, offset + APK_DIGEST_CHUNK_SIZE);
+      const prefix = Buffer.alloc(5);
+      prefix[0] = 0xa5;
+      prefix.writeUInt32LE(chunk.length, 1);
+      chunkDigests.push(
+        createHash("sha256").update(prefix).update(chunk).digest()
+      );
+    }
+  }
+  const digestPrefix = Buffer.alloc(5);
+  digestPrefix[0] = 0x5a;
+  digestPrefix.writeUInt32LE(chunkDigests.length, 1);
+  const contentDigest = createHash("sha256")
+    .update(digestPrefix)
+    .update(Buffer.concat(chunkDigests))
+    .digest();
+
+  const digestRecord = Buffer.concat([
+    uint32Le(APK_SIG_RSA_PKCS1_SHA256),
+    lengthPrefixed(contentDigest),
+  ]);
+  const signedData = Buffer.concat([
+    lengthPrefixed(lengthPrefixed(digestRecord)),
+    lengthPrefixed(lengthPrefixed(identity.certificateDer)),
+    lengthPrefixed(Buffer.alloc(0)), // No additional signed attributes.
+  ]);
+  const signer = createSign("RSA-SHA256");
+  signer.update(signedData);
+  signer.end();
+  const signature = signer.sign(identity.privateKey);
+  const signatureRecord = Buffer.concat([
+    uint32Le(APK_SIG_RSA_PKCS1_SHA256),
+    lengthPrefixed(signature),
+  ]);
+  const v2Signer = Buffer.concat([
+    lengthPrefixed(signedData),
+    lengthPrefixed(lengthPrefixed(signatureRecord)),
+    lengthPrefixed(identity.publicKeyDer),
+  ]);
+  const v2Value = Buffer.concat([
+    uint32Le(4 + v2Signer.length),
+    lengthPrefixed(v2Signer),
+  ]);
+  const pair = Buffer.concat([
+    uint64Le(4 + v2Value.length),
+    uint32Le(APK_SIG_V2_BLOCK_ID),
+    v2Value,
+  ]);
+  const blockSize = pair.length + 8 + APK_SIG_BLOCK_MAGIC.length;
+  const signingBlock = Buffer.concat([
+    uint64Le(blockSize),
+    pair,
+    uint64Le(blockSize),
+    APK_SIG_BLOCK_MAGIC,
+  ]);
+
+  const signedEocd = Buffer.from(apk.subarray(eocdOffset));
+  signedEocd.writeUInt32LE(centralDirectoryOffset + signingBlock.length, 16);
+  return Buffer.concat([
+    apk.subarray(0, centralDirectoryOffset),
+    signingBlock,
+    apk.subarray(centralDirectoryOffset, eocdOffset),
+    signedEocd,
+  ]);
 }
 
 const DEFAULT_SERVER_URL = "http://10.0.2.2:4100";
@@ -1324,8 +1502,14 @@ export async function buildMarryBaseApk(options?: {
     { name: "assets/www/app-icon.png", data: mobileIcon, store: false },
   ];
 
-  const { manifestMf, signatureSf, signatureRsa } =
-    buildApkSignatureFiles(coreEntries);
+  const privateKey = await getApkSigningKey();
+  const {
+    manifestMf,
+    signatureSf,
+    signatureRsa,
+    certificateDer,
+    publicKeyDer,
+  } = buildApkSignatureFiles(coreEntries, privateKey);
 
   const allEntries: Array<{ name: string; data: Buffer; store?: boolean }> = [
     ...coreEntries,
@@ -1334,7 +1518,12 @@ export async function buildMarryBaseApk(options?: {
     { name: "META-INF/MARRYBAS.RSA", data: signatureRsa, store: false },
   ];
 
-  const apkBuffer = buildZipAlignedArchive(allEntries);
+  const v1SignedApk = buildZipAlignedArchive(allEntries);
+  const apkBuffer = signApkV2(v1SignedApk, {
+    privateKey,
+    certificateDer,
+    publicKeyDer,
+  });
   const checksumSha256 = createHash("sha256").update(apkBuffer).digest("hex");
 
   const fileName = projectSlug ? `marry-base-${projectSlug}.apk` : "marry-base.apk";

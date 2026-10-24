@@ -26,6 +26,7 @@ Required and optional environment variables (validated at startup in `src/config
 - `TRUST_PROXY`: Defaults to `false`. Set `true` only when the API is reachable exclusively through a trusted reverse proxy that overwrites forwarded headers.
 - `STORAGE_DIR`: Local object storage directory (`./storage` default).
 - `BACKUP_DIR`: Directory for logical backup snapshots (`./data/backups` default).
+- `APK_SIGNING_KEY_FILE`: Persistent RSA private key used for Android v1/v2 signing (`./data/apk-signing/private-key.pem` default). `APK_SIGNING_PRIVATE_KEY` can instead supply a PKCS#8 PEM through a secret manager. Keep this identity unchanged for every update to a given installed package.
 - `STATEMENT_TIMEOUT_MS`: Per-query PostgreSQL statement timeout (`15000` ms default).
 - `MAX_QUERY_ROWS`: Maximum rows returned per query (`1000` default).
 - `FUNCTION_TIMEOUT_MS`: Hard execution timeout cap for server functions (`5000` ms default).
@@ -64,6 +65,9 @@ Restoration verifies the SHA-256 checksum first, then transactionally recreates 
 ```bash
 npm run cli -- backup restore <backupId>
 ```
+
+### Android signing-key recovery
+Back up `APK_SIGNING_KEY_FILE` separately in an encrypted secret store. Logical database backups do not include this private key. Android will reject an update signed by a replacement key, so losing it can require users to uninstall and reinstall the app. Never place the key in Git or in a downloadable release artifact. After every release build, run `npm run verify:apk` with Android `apksigner` installed.
 
 ---
 
