@@ -92,32 +92,49 @@ jobs:
 
       - name: Verify APK is a genuine, signed Android package
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          fail() { echo "::error::$1"; exit 1; }
           echo "::notice::CI-MARK verify-apk-start"
           APK="android/app/build/outputs/apk/debug/app-debug.apk"
           if [ ! -s "$APK" ]; then
-            echo "::error::No APK was produced at $APK"
             ls -R android/app/build/outputs 2>/dev/null || true
-            exit 1
+            fail "No APK was produced at $APK"
           fi
           SIZE=$(wc -c < "$APK" | tr -d ' ')
           echo "APK size: $SIZE bytes"
-          test "$SIZE" -gt 20000
-          unzip -l "$APK" > /tmp/entries.txt
-          cat /tmp/entries.txt
-          grep -q "AndroidManifest.xml" /tmp/entries.txt
-          grep -q "classes.dex" /tmp/entries.txt
-          grep -q "resources.arsc" /tmp/entries.txt
-          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          BUILD_TOOLS=$(ls -d "$SDK"/build-tools/* | sort -V | tail -1)
-          AAPT="$BUILD_TOOLS/aapt2"
-          "$AAPT" dump badging "$APK" | tee /tmp/badging.txt
-          grep -q "package: name='com.marrybase.platform'" /tmp/badging.txt
-          grep -q "sdkVersion:'24'" /tmp/badging.txt
-          APKSIGNER="$BUILD_TOOLS/apksigner"
-          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee /tmp/signature.txt
-          test -s /tmp/signature.txt
-          "$BUILD_TOOLS/zipalign" -c -v 4 "$APK" | tail -1
+          [ "$SIZE" -gt 20000 ] || fail "APK is implausibly small ($SIZE bytes)"
+          unzip -l "$APK" > /tmp/entries.txt || fail "APK is not a readable ZIP archive"
+          head -30 /tmp/entries.txt
+          grep -q "AndroidManifest.xml" /tmp/entries.txt || fail "AndroidManifest.xml is missing from the APK"
+          grep -q "classes.dex" /tmp/entries.txt || fail "classes.dex is missing from the APK (no application code)"
+          grep -q "resources.arsc" /tmp/entries.txt || fail "resources.arsc is missing from the APK"
+          echo "::notice::CI-MARK apk-structure-ok"
+
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          [ -d "$SDK" ] || fail "Android SDK directory not found (checked ANDROID_HOME, ANDROID_SDK_ROOT, $SDK)"
+          BUILD_TOOLS=$(ls -d "$SDK"/build-tools/* 2>/dev/null | sort -V | tail -1)
+          [ -n "${BUILD_TOOLS:-}" ] && [ -d "$BUILD_TOOLS" ] || fail "No Android build-tools installed under $SDK/build-tools"
+          echo "Using build-tools: $BUILD_TOOLS"
+
+          "$BUILD_TOOLS/aapt2" dump badging "$APK" > /tmp/badging.txt 2>/tmp/badging.err             || fail "aapt2 dump badging failed: $(tail -3 /tmp/badging.err | tr '\n' ' ')"
+          head -6 /tmp/badging.txt
+          grep -q "package: name='com.marrybase.platform'" /tmp/badging.txt             || fail "Unexpected package: $(grep -m1 '^package:' /tmp/badging.txt)"
+          grep -q "sdkVersion:'24'" /tmp/badging.txt             || fail "minSdk is not 24: $(grep -m1 'sdkVersion' /tmp/badging.txt)"
+          echo "::notice::CI-MARK apk-badging-ok"
+
+          if ! "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" > /tmp/signature.txt 2>&1; then
+            tail -6 /tmp/signature.txt | while IFS= read -r line; do echo "::error::apksigner: $line"; done
+            exit 1
+          fi
+          grep -E "^(Verifies|Verified using|Number of signers)" /tmp/signature.txt || fail "apksigner reported no verification result"
+          echo "::notice::CI-MARK apk-signature-ok"
+
+          if ! "$BUILD_TOOLS/zipalign" -c -v 4 "$APK" > /tmp/align.txt 2>&1; then
+            tail -4 /tmp/align.txt | while IFS= read -r line; do echo "::error::zipalign: $line"; done
+            exit 1
+          fi
+          echo "::notice::CI-MARK apk-alignment-ok"
+
           mkdir -p releases
           cp "$APK" releases/marry-base.apk
           node -e "
@@ -127,14 +144,14 @@ jobs:
               builtAt:new Date().toISOString(),builder:'github-actions-gradle',versionName:'1.1.0',versionCode:2,
               commit:process.env.GITHUB_SHA,sizeBytes:b.length,checksumSha256:createHash('sha256').update(b).digest('hex')
             },null,2));
-          "
+          " || fail "Could not write releases/marry-base.apk.json"
           {
             echo "## MARRY BASE Android build"
             echo ""
             echo "- APK: \`releases/marry-base.apk\`"
             echo "- Size: $SIZE bytes"
             echo "- SHA-256: \`$(sha256sum releases/marry-base.apk | awk '{print $1}')\`"
-            echo "- Signed: yes (CI keystore, see apksigner output)"
+            echo "- Signed: yes (CI debug keystore, verified with apksigner)"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::notice::CI-MARK verify-apk-done"
 
