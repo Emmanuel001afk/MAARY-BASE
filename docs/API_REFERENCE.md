@@ -18,9 +18,9 @@ All project-scoped endpoints accept either a `:projectRef` slug (e.g. `acme-app`
 - `GET /ready` — Checks PostgreSQL query execution, migration state, and storage directory writability (returns `503` if unhealthy).
 - `GET /v1/metrics` — Operational metrics in JSON or Prometheus text format (`?format=prometheus`).
 - `GET /v1/platform` — Platform version, database mode, and module statuses.
-- `POST /v1/platform/apk/build` — Build the APK (requires a platform access JWT). Optional `projectSlug`, `serverUrl`, `versionName`, and `versionCode` produce a configured project artifact.
-- `GET /v1/platform/apk/download` — Download the current default APK.
-- `GET /v1/platform/apk/download?projectSlug=<slug>` — Download the exact previously built project artifact; returns 404 until that project APK is built.
+- `GET /v1/platform/apk/status` — Operator-authenticated. Reports the artifact state (`available`, `missing`, `invalid`), SHA-256, size, metadata, structural verification, expected Gradle output path, and whether this host can run a Gradle build (`buildEnvironment.missingPrerequisites`). Always honest; never a placeholder.
+- `POST /v1/platform/apk/build` — Operator-authenticated. Runs the genuine Gradle pipeline (`android/gradlew :app:assembleDebug`) with optional `{ versionName, versionCode }`. Returns `201` with build metadata, `409 apk_build_unavailable` (with missing JDK/SDK details and instructions), or `500 apk_build_failed`/`apk_build_invalid` with a log tail. No package is fabricated.
+- `GET /v1/platform/apk/download` — Serves the verified artifact with `x-apk-sha256`; `404` when missing or invalid.
 - `POST /v1/platform/auth/register` — Register a platform account (`{ email, password, name }`). In production, the first account must include the configured `x-platform-bootstrap-token` header to receive the initial superadmin role; later accounts are ordinary accounts.
 - `POST /v1/platform/auth/login` — Sign in platform operator (`{ email, password }`).
 - `POST /v1/platform/auth/refresh` — Rotate platform refresh token (`{ refreshToken }`).
@@ -28,6 +28,18 @@ All project-scoped endpoints accept either a `:projectRef` slug (e.g. `acme-app`
 - `GET /v1/platform/auth/me` — Current platform operator profile.
 - `GET /v1/platform/audit` — Query platform audit trail.
 - `GET /v1/platform/extensions` & `POST /v1/platform/extensions` — List and enable supported PostgreSQL extensions.
+
+### Operational status, logs and API catalogue
+
+All require a platform operator session with access to the project unless noted.
+
+- `GET /v1/platform/status` — Platform-wide checks per subsystem with `state`, `summary`, `checks`, `verifiedBy` and a next `action`; `overall` is derived from the checks.
+- `GET /v1/platform/version` — Version, commit (when set), Node version, environment and migration counts.
+- `GET /v1/projects/:projectRef/status` — Per-project services (database, RLS, auth, API, storage, realtime, functions, jobs, backups) computed from live queries.
+- `GET /v1/projects/:projectRef/logs?source=all|audit|function|job|realtime|backup|storage&level=all|info|warn|error&limit=1..500` — Unified, server-recorded log stream with per-source counts. Unknown sources return `400 validation_error`.
+- `GET /v1/projects/:projectRef/database/roles` — Project roles, superuser/BYPASSRLS flags, grants, tables lacking RLS and policies. Never returns passwords.
+- `GET /v1/projects/:projectRef/database/connection` — Connection mode, schema, pool, timeout, extensions and capabilities. Embedded mode reports `dataDirectory`; external mode reports host/port/database/user but never a password.
+- `GET /v1/projects/:projectRef/api/endpoints` — Generated endpoint catalogue with methods, paths, curl examples and notes, derived from the current schema.
 
 ---
 
@@ -78,7 +90,7 @@ All project-scoped endpoints accept either a `:projectRef` slug (e.g. `acme-app`
 
 ## 5. Project Authentication & Identity
 
-- `GET /v1/projects/:projectRef/auth/config` & `PATCH /v1/projects/:projectRef/auth/config`
+- `GET /v1/projects/:projectRef/auth/config` & `PATCH /v1/projects/:projectRef/auth/config` — `allow_public_signup`, `require_email_verification`, `password_min_length`, token TTLs, and `oauth_providers` (`{ github: { enabled, clientId, authorizeUrl?, tokenUrl?, scopes? }, … }`).
 - `POST /v1/projects/:projectRef/auth/signup` — Register user (`{ email, password, phone?, user_metadata? }`).
 - `POST /v1/projects/:projectRef/auth/login` — Authenticate with email & password.
 - `POST /v1/projects/:projectRef/auth/token` — OAuth2-style token endpoint (`grant_type=password|refresh_token`).

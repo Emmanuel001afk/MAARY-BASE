@@ -1,12 +1,20 @@
 import {
-  $, api, closeDialog, confirmAction, copyText, debounce,
-  downloadText, esc, parseJson, projectApi, reportError, showCredentials, showToast,
+  $, api, badge, closeDialog, confirmAction, copyText, debounce,
+  downloadText, esc, icon, parseJson, projectApi, reportError, showCredentials, showToast,
   state, storageAdapter,
 } from "./core.js";
 import {
   appendRealtimeLog, browseTable, loadPage, openBucket, renderSqlResult,
   renderTablesList, updateRealtimeUi,
 } from "./pages.js";
+
+function formatBytesInline(value) {
+  const bytes = Number(value) || 0;
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
 
 function encodePath(path) {
   return String(path).split("/").map((part) => encodeURIComponent(part)).join("/");
@@ -134,9 +142,10 @@ export async function handleAction(action, element) {
       break;
     case "focus-create-table": focusElement("tbl-name", "create-table-disclosure"); break;
     case "focus-create-bucket": focusElement("bucket-name", "create-bucket-disclosure"); break;
-    case "focus-deploy-function": activateLocalTab("functions"); focusElement("fn-slug"); break;
-    case "focus-create-key": activateLocalTab("keys"); focusElement("key-name"); break;
-    case "create-backup-focus": activateLocalTab("backups"); focusElement("backup-name-input"); break;
+    case "focus-deploy-function": focusElement("fn-slug"); break;
+    case "focus-create-job": focusElement("job-queue"); break;
+    case "focus-create-key": focusElement("key-name"); break;
+    case "create-backup-focus": focusElement("backup-name-input"); break;
     case "browse-table": await browseTable(element.dataset.table); break;
     case "refresh-rows":
       if (state.activeTable) await browseTable(state.activeTable);
@@ -152,6 +161,43 @@ export async function handleAction(action, element) {
       await api(projectApi(`/database/tables/${encodeURIComponent(tableName)}/rls`), { method: "POST", body: { enabled, force: true } });
       showToast(`RLS ${enabled ? "enabled" : "disabled"} on ${tableName}.`);
       await loadPage("database");
+      break;
+    }
+    case "apply-row-query":
+      state.rowOffset = 0;
+      await browseTable(state.activeTable);
+      break;
+    case "rows-prev":
+      state.rowOffset = Math.max(0, state.rowOffset - (Number($("row-limit")?.value) || 50));
+      await browseTable(state.activeTable);
+      break;
+    case "rows-next":
+      state.rowOffset += Number($("row-limit")?.value) || 50;
+      await browseTable(state.activeTable);
+      break;
+    case "edit-row": {
+      let row;
+      try {
+        row = JSON.parse(element.dataset.row || "{}");
+      } catch {
+        throw new Error("The selected row could not be read.");
+      }
+      state.rowEdit = { table: element.dataset.table, filter: element.dataset.filter, row };
+      $("row-dialog-title").textContent = `Edit row in ${element.dataset.table}`;
+      $("row-edit-json").value = JSON.stringify(row, null, 2);
+      $("row-dialog").showModal();
+      break;
+    }
+    case "delete-row": {
+      const confirmed = await confirmAction({
+        title: "Delete this row?",
+        message: "The row is permanently removed through the project data API. This cannot be undone.",
+        confirmLabel: "Delete row",
+      });
+      if (!confirmed) return;
+      await api(`${projectApi(`/rest/${encodeURIComponent(element.dataset.table)}`)}?${element.dataset.filter}`, { method: "DELETE" });
+      showToast("Row deleted.");
+      await browseTable(element.dataset.table);
       break;
     }
     case "drop-table": {
@@ -285,28 +331,28 @@ export async function handleAction(action, element) {
     case "cancel-job":
       await api(projectApi(`/jobs/${encodeURIComponent(element.dataset.id)}/cancel`), { method: "POST" });
       showToast("Job cancelled.");
-      await loadPage("functions");
+      await loadPage("jobs");
       break;
     case "delete-schedule": {
       const confirmed = await confirmAction({ title: `Delete ${element.dataset.name}?`, message: "This recurring schedule will no longer enqueue jobs.", confirmLabel: "Delete schedule" });
       if (!confirmed) return;
       await api(projectApi(`/schedules/${encodeURIComponent(element.dataset.id)}`), { method: "DELETE" });
       showToast("Schedule deleted.");
-      await loadPage("functions");
+      await loadPage("jobs");
       break;
     }
     case "rt-disconnect": closeRealtime(); break;
     case "clear-realtime-log": $("rt-stream-log").textContent = "Waiting for a realtime connection…"; break;
     case "toggle-secrets":
       state.revealSecrets = !state.revealSecrets;
-      await loadPage("security");
+      await loadPage("settings");
       break;
     case "rotate-key": {
       const confirmed = await confirmAction({ title: `Rotate ${element.dataset.name}?`, message: "The current credential will be revoked immediately. Update every application using it with the replacement key.", confirmLabel: "Rotate key" });
       if (!confirmed) return;
       const result = await api(projectApi(`/api-keys/${encodeURIComponent(element.dataset.id)}/rotate`), { method: "POST" });
       showCredentials("Replacement API key", result.apiKey.raw_key);
-      await loadPage("security");
+      await loadPage("api");
       break;
     }
     case "revoke-key": {
@@ -314,7 +360,7 @@ export async function handleAction(action, element) {
       if (!confirmed) return;
       await api(projectApi(`/api-keys/${encodeURIComponent(element.dataset.id)}`), { method: "DELETE" });
       showToast("API key revoked.");
-      await loadPage("security");
+      await loadPage("api");
       break;
     }
     case "delete-secret": {
@@ -322,7 +368,7 @@ export async function handleAction(action, element) {
       if (!confirmed) return;
       await api(projectApi(`/secrets/${encodeURIComponent(element.dataset.id)}`), { method: "DELETE" });
       showToast("Secret deleted.");
-      await loadPage("security");
+      await loadPage("settings");
       break;
     }
     case "remove-member": {
@@ -330,7 +376,7 @@ export async function handleAction(action, element) {
       if (!confirmed) return;
       await api(projectApi(`/members/${encodeURIComponent(element.dataset.user)}`), { method: "DELETE" });
       showToast("Team member removed.");
-      await loadPage("security");
+      await loadPage("settings");
       break;
     }
     case "delete-environment": {
@@ -338,7 +384,7 @@ export async function handleAction(action, element) {
       if (!confirmed) return;
       await api(projectApi(`/environments/${encodeURIComponent(element.dataset.id)}`), { method: "DELETE" });
       showToast("Environment deleted.");
-      await loadPage("overview");
+      await loadPage(state.activeTab === "settings" ? "settings" : "overview");
       break;
     }
     case "verify-backup": {
@@ -351,18 +397,99 @@ export async function handleAction(action, element) {
       if (!confirmed) return;
       await api(projectApi(`/backups/${encodeURIComponent(element.dataset.id)}/restore`), { method: "POST", timeout: 120_000 });
       showToast("Backup verified and restored successfully.", "success", "Restore complete");
-      await loadPage("operations");
+      await loadPage("backups");
       break;
     }
     case "download-openapi":
       if (window.__maaryOpenApi) downloadText(`${state.activeProject.slug}-openapi.json`, JSON.stringify(window.__maaryOpenApi, null, 2));
       break;
+    case "disable-oauth-provider": {
+      const providerName = element.dataset.provider;
+      const confirmed = await confirmAction({ title: `Disable ${providerName}?`, message: "New OAuth authorizations for this provider will stop until it is enabled again. Existing linked identities remain.", confirmLabel: "Disable provider" });
+      if (!confirmed) return;
+      const current = {
+        ...(state.authConfig?.oauth_providers || {}),
+        [providerName]: { ...(state.authConfig?.oauth_providers?.[providerName] || {}), enabled: false },
+      };
+      await api(projectApi("/auth/config"), { method: "PATCH", body: { oauth_providers: current } });
+      showToast(`${providerName} disabled.`);
+      await loadPage("auth");
+      break;
+    }
     case "delete-project": await deleteProject(); break;
     default: break;
   }
 }
 
 const submitHandlers = {
+  "alter-table-form": async () => {
+    const tableName = $("alter-table-name").value.trim();
+    const action = $("alter-operation").value;
+    const columnName = $("alter-column").value.trim();
+    const newName = $("alter-new-name").value.trim();
+    const columnType = $("alter-type").value.trim();
+    if (!tableName) throw new Error("Select a table before altering it.");
+    let body;
+    if (action === "add_column") {
+      if (!columnName) throw new Error("Enter the column name to add.");
+      body = { action, column: { name: columnName, type: columnType || "text", notNull: false } };
+    } else if (action === "drop_column") {
+      if (!columnName) throw new Error("Enter the column to drop.");
+      body = { action, columnName };
+    } else if (action === "rename_column") {
+      if (!columnName || !newName) throw new Error("Renaming needs the current and new column names.");
+      body = { action, fromName: columnName, toName: newName };
+    } else if (action === "create_index") {
+      if (!columnName) throw new Error("Choose the column to index.");
+      body = {
+        action,
+        indexName: newName || `${tableName}_${columnName}_idx`,
+        columns: [columnName],
+        unique: $("alter-unique").checked,
+      };
+    } else {
+      const indexName = newName || columnName;
+      if (!indexName) throw new Error("Enter the index name to drop.");
+      body = { action, indexName };
+    }
+    await api(projectApi(`/database/tables/${encodeURIComponent(tableName)}`), { method: "PATCH", body });
+    showToast(`Schema change applied to ${tableName}.`);
+    $("alter-table-form").reset();
+    await loadPage("database");
+  },
+  "row-edit-form": async () => {
+    const edit = state.rowEdit;
+    if (!edit) throw new Error("Select a row to edit first.");
+    const payload = parseJson($("row-edit-json").value, "Row JSON");
+    if (!payload || Array.isArray(payload) || typeof payload !== "object") throw new Error("Row data must be a single JSON object.");
+    delete payload[edit.filter.split("=")[0]];
+    await api(`${projectApi(`/rest/${encodeURIComponent(edit.table)}`)}?${edit.filter}`, { method: "PATCH", body: payload });
+    closeDialog("row-dialog");
+    state.rowEdit = null;
+    showToast("Row updated.");
+    await browseTable(edit.table);
+  },
+  "oauth-provider-form": async () => {
+    const provider = $("oauth-provider").value;
+    const clientId = $("oauth-client-id").value.trim();
+    if (!clientId) throw new Error("Enter the OAuth client ID.");
+    const scopes = $("oauth-scopes").value.split(",").map((scope) => scope.trim()).filter(Boolean);
+    const definition = {
+      enabled: $("oauth-enabled").checked,
+      clientId,
+      scopes: scopes.length ? scopes : ["openid", "email", "profile"],
+    };
+    const authorizeUrl = $("oauth-authorize-url").value.trim();
+    const tokenUrl = $("oauth-token-url").value.trim();
+    if (authorizeUrl) definition.authorizeUrl = authorizeUrl;
+    if (tokenUrl) definition.tokenUrl = tokenUrl;
+    if (provider === "custom" && !authorizeUrl) throw new Error("A custom OIDC provider needs an authorize URL.");
+    const providers = { ...(state.authConfig?.oauth_providers || {}), [provider]: definition };
+    await api(projectApi("/auth/config"), { method: "PATCH", body: { oauth_providers: providers } });
+    showToast(`${provider} identity provider saved.`);
+    $("oauth-provider-form").reset();
+    await loadPage("auth");
+  },
   "create-project-form": async () => {
     const result = await api("/v1/projects", { method: "POST", body: { name: $("proj-name").value, slug: $("proj-slug").value || undefined, description: $("proj-desc").value } });
     closeDialog("new-project-dialog");
@@ -415,7 +542,7 @@ const submitHandlers = {
   "create-policy-form": async () => {
     await api(projectApi("/database/policies"), { method: "POST", body: { tableName: $("pol-table").value, policyName: $("pol-name").value, command: $("pol-cmd").value, usingExpression: $("pol-using").value || null, checkExpression: $("pol-check").value || null, enableRlsOnTable: $("pol-enable-rls").checked } });
     showToast("RLS policy created.");
-    await loadPage("sql");
+    await loadPage("access");
   },
   "apply-migration-form": async () => {
     await api(projectApi("/database/migrations"), { method: "POST", body: { version: $("mig-version").value, name: $("mig-name").value, upSql: $("mig-up").value, downSql: $("mig-down").value }, timeout: 60_000 });
@@ -483,12 +610,12 @@ const submitHandlers = {
   "create-job-form": async () => {
     await api(projectApi("/jobs"), { method: "POST", body: { jobType: $("job-type").value, queueName: $("job-queue").value, delaySeconds: Number($("job-delay").value), payload: parseJson($("job-payload").value, "Job payload") } });
     showToast("Background job enqueued.");
-    await loadPage("functions");
+    await loadPage("jobs");
   },
   "create-schedule-form": async () => {
     await api(projectApi("/schedules"), { method: "POST", body: { name: $("schedule-name").value, jobType: $("schedule-type").value, intervalSeconds: Number($("schedule-interval").value), targetSlug: $("schedule-target").value || undefined, payload: parseJson($("schedule-payload").value, "Schedule payload") } });
     showToast("Recurring schedule created.");
-    await loadPage("functions");
+    await loadPage("jobs");
   },
   "rt-connect-form": connectRealtime,
   "rt-broadcast-form": async () => {
@@ -500,25 +627,25 @@ const submitHandlers = {
     const result = await api(projectApi("/api-keys"), { method: "POST", body: { name: $("key-name").value, role: $("key-role").value, scopes: $("key-scopes").value.split(",").map((scope) => scope.trim()).filter(Boolean) } });
     $("create-key-form").reset();
     showCredentials("API key generated", result.apiKey.raw_key);
-    await loadPage("security");
+    await loadPage("api");
   },
   "create-secret-form": async () => {
     await api(projectApi("/secrets"), { method: "POST", body: { name: $("sec-name").value, value: $("sec-val").value, description: $("sec-description").value } });
     $("create-secret-form").reset();
     showToast("Secret encrypted and saved.");
-    await loadPage("security");
+    await loadPage("settings");
   },
   "add-member-form": async () => {
     await api(projectApi("/members"), { method: "POST", body: { email: $("member-email").value, role: $("member-role").value } });
     $("add-member-form").reset();
     showToast("Project membership saved.");
-    await loadPage("security");
+    await loadPage("settings");
   },
   "create-backup-form": async () => {
     await api(projectApi("/backups"), { method: "POST", body: { name: $("backup-name-input").value || undefined }, timeout: 120_000 });
     $("backup-name-input").value = "";
     showToast("Project snapshot created.", "success", "Backup complete");
-    await loadPage("operations");
+    await loadPage("backups");
   },
   "project-settings-form": async () => {
     const result = await api(projectApi(""), { method: "PATCH", body: { name: $("settings-name").value, description: $("settings-description").value, status: $("settings-status").value } });
@@ -526,10 +653,61 @@ const submitHandlers = {
     showToast("Project settings saved.");
     window.dispatchEvent(new CustomEvent("maary:projects-refresh", { detail: { slug: result.project.slug } }));
   },
-  "build-apk-form": async () => {
-    const result = await api("/v1/platform/apk/build", { method: "POST", body: { projectSlug: state.activeProject.slug, serverUrl: $("apk-server-url").value, versionName: $("apk-version-name").value, versionCode: Number($("apk-version-code").value) }, timeout: 120_000 });
-    $("apk-build-result").innerHTML = `<div class="notice">${"<svg class=\"icon\"><use href=\"#i-check\"></use></svg>"}<p>Signed APK built successfully.<br><span class="mono">SHA-256: ${esc(result.apk.checksumSha256)}</span></p></div><a class="btn btn-primary w-full section-gap" href="${esc(result.apk.downloadUrl)}">${"<svg class=\"icon\"><use href=\"#i-download\"></use></svg>"}Download ${esc(result.apk.fileName)}</a>`;
-    showToast("Signed Android package is ready.", "success", "APK built");
+  "apk-build-form": async () => {
+    const output = $("apk-build-output");
+    output.innerHTML = `<div class="notice">${icon("realtime")}<p>Starting the Gradle build on the server. This can take several minutes on a cold cache.</p></div>`;
+    try {
+      const result = await api("/v1/platform/apk/build", { method: "POST", body: { versionName: $("apk-version-name").value, versionCode: Number($("apk-version-code").value) }, timeout: 900_000 });
+      output.innerHTML = `<div class="notice success">${icon("check")}<p>Gradle build succeeded.<br><span class="mono">SHA-256: ${esc(result.build.artifact.checksumSha256)}</span><br>${formatBytesInline(result.build.artifact.sizeBytes)} · ${Math.round(result.build.durationMs / 1000)}s</p></div><a class="btn btn-primary section-gap" href="/v1/platform/apk/download">${icon("download")}Download ${esc(result.build.artifact.fileName)}</a>`;
+      showToast("Android package built from source by Gradle.", "success", "Build complete");
+    } catch (error) {
+      if (error.code === "apk_build_unavailable") {
+        const details = error.details || {};
+        output.innerHTML = `<div class="notice warning">${icon("alert")}<p><strong>This host cannot run a Gradle build.</strong><br>Missing: ${esc((details.missingPrerequisites || []).join(", ") || "Android toolchain")}<br>${esc(details.instructions || "")}</p></div>`;
+      } else if (error.code === "apk_build_failed" && error.details?.logTail) {
+        output.innerHTML = `<div class="notice danger">${icon("alert")}<p><strong>Gradle build failed.</strong> ${esc(error.message)}</p></div><pre class="code-block">${esc(error.details.logTail.slice(-40).join("\n"))}</pre>`;
+      } else {
+        output.innerHTML = `<div class="notice danger">${icon("alert")}<p>${esc(error.message)}</p></div>`;
+      }
+      throw error;
+    }
+  },
+  "api-test-form": async () => {
+    const method = $("api-test-method").value;
+    const path = $("api-test-path").value.trim();
+    const apiKey = $("api-test-key").value;
+    const resultBox = $("api-test-result");
+    const metaBox = $("api-test-meta");
+    if (!path) throw new Error("Enter a path or URL to request.");
+    const slug = state.activeProject?.slug;
+    const url = /^https?:\/\//i.test(path) ? path : `${window.location.origin}/v1/projects/${encodeURIComponent(slug)}${path.startsWith("/") ? "" : "/"}${path}`;
+    const headers = { Accept: "application/json" };
+    if (apiKey) headers.apikey = apiKey;
+    else if (state.token) headers.Authorization = `Bearer ${state.token}`;
+    let body;
+    if (["POST", "PATCH", "PUT"].includes(method)) {
+      const raw = $("api-test-body").value.trim();
+      body = raw || undefined;
+      if (body) headers["Content-Type"] = "application/json";
+    }
+    const started = performance.now();
+    resultBox.textContent = "Sending request…";
+    metaBox.innerHTML = "";
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 30_000);
+    try {
+      const response = await fetch(url, { method, headers, body, signal: controller.signal });
+      const text = await response.text();
+      let pretty = text;
+      try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch { /* Keep raw text. */ }
+      metaBox.innerHTML = `${badge(response.status < 400 ? "success" : "error", response.status < 400 ? "success" : "danger", `HTTP ${response.status}`)}<span>${Math.round(performance.now() - started)} ms</span><span class="mono">${esc(method)} ${esc(url)}</span>`;
+      resultBox.textContent = pretty || "(empty response)";
+    } catch (error) {
+      metaBox.innerHTML = `${badge("network_error", "danger")}`;
+      resultBox.textContent = error.name === "AbortError" ? "The request timed out after 30 seconds." : String(error.message || error);
+    } finally {
+      window.clearTimeout(timer);
+    }
   },
 };
 
@@ -551,7 +729,17 @@ export async function handleChange(element) {
       if (element.value !== "" && history[Number(element.value)]) $("sql-editor-input").value = history[Number(element.value)];
       break;
     }
-    case "job-status-filter": await loadPage("functions"); break;
+    case "job-status-filter": await loadPage("jobs"); break;
+    case "log-source":
+    case "log-level":
+    case "log-limit": await loadPage("logs"); break;
+    case "row-order-column":
+    case "row-order-direction":
+    case "row-filter-column": {
+      state.rowOffset = 0;
+      if (state.activeTable) await browseTable(state.activeTable);
+      break;
+    }
     case "obj-file": {
       const file = element.files[0];
       if (file) {
@@ -568,14 +756,12 @@ export async function handleChange(element) {
 
 const debouncedUserSearch = debounce(() => loadPage("auth").catch(reportError), 350);
 const debouncedObjectFilter = debounce(() => state.activeBucket && openBucket(state.activeBucket).catch(reportError), 300);
-const debouncedAuditFilter = debounce(() => loadPage("operations").catch(reportError), 350);
 
 export function handleInput(element) {
   switch (element.id) {
     case "table-search": renderTablesList(); break;
     case "auth-user-search": debouncedUserSearch(); break;
     case "object-prefix": debouncedObjectFilter(); break;
-    case "audit-action-filter": debouncedAuditFilter(); break;
     default: break;
   }
 }

@@ -12,6 +12,7 @@ export async function registerHealthRoutes(
   app.get("/health", async () => ({
     status: "ok",
     service: "maary-base-api",
+    version: config.APP_VERSION,
     uptimeSeconds: Math.floor(process.uptime()),
     timestamp: new Date().toISOString(),
   }));
@@ -63,6 +64,7 @@ export async function registerHealthRoutes(
 
     return {
       status: "ready",
+      version: config.APP_VERSION,
       dependencies,
       pool: pool.getStats(),
       worker: {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { rm } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
@@ -250,150 +250,77 @@ test("Critical #2: Database privilege boundary enforces non-superuser role isola
   }
 });
 
-test("Critical #3: Android APK contains compiled binary AXML manifest, ARSC resource table, executable DEX bytecode, 4-byte zipalign, and PKCS#7 signature", async () => {
+test("Critical #3: Android APK delivery is verified and cannot be fabricated by the server", async () => {
   const app = await buildApp();
+  const artifactPath = resolve(process.cwd(), config.APK_ARTIFACT_PATH);
+  const metadataPath = resolve(process.cwd(), config.APK_METADATA_PATH);
+  const backups = {
+    artifact: await readFile(artifactPath).catch(() => null),
+    metadata: await readFile(metadataPath).catch(() => null),
+  };
   try {
-    const dlRes = await app.inject({
-      method: "GET",
-      url: "/v1/platform/apk/download",
+    const registration = await app.inject({
+      method: "POST",
+      url: "/v1/platform/auth/register",
+      payload: { email: `apk-security-${Date.now()}@marrybase.dev`, password: "StrongPassword123!" },
     });
-    assert.equal(dlRes.statusCode, 200);
-    const apk = dlRes.rawPayload;
+    assert.equal(registration.statusCode, 201, registration.body);
+    const headers = { authorization: `Bearer ${registration.json().accessToken}` };
 
-    // Parse ZIP local file headers and verify 4-byte zipalign on uncompressed entries
-    const entries = new Map<
-      string,
-      { method: number; dataOffset: number; data: Buffer }
-    >();
-    let pos = 0;
-    while (pos + 30 <= apk.length && apk.readUInt32LE(pos) === 0x04034b50) {
-      const method = apk.readUInt16LE(pos + 8);
-      const compSize = apk.readUInt32LE(pos + 18);
-      const nameLen = apk.readUInt16LE(pos + 26);
-      const extraLen = apk.readUInt16LE(pos + 28);
-      const name = apk.subarray(pos + 30, pos + 30 + nameLen).toString("utf8");
-      const dataOffset = pos + 30 + nameLen + extraLen;
-      const rawData = apk.subarray(dataOffset, dataOffset + compSize);
-      const data = method === 0 ? rawData : inflateRawSync(rawData);
-      entries.set(name, { method, dataOffset, data });
-      pos = dataOffset + compSize;
+    // 1. Removing the artifact must make the API truthful: 404 on download and
+    //    "missing" in status. No package may be synthesised on demand.
+    await rm(artifactPath, { force: true });
+    await rm(metadataPath, { force: true });
+    const missingDownload = await app.inject({ method: "GET", url: "/v1/platform/apk/download" });
+    assert.equal(missingDownload.statusCode, 404);
+    assert.equal(missingDownload.json().error, "not_found");
+
+    const missingStatus = await app.inject({ method: "GET", url: "/v1/platform/apk/status", headers });
+    assert.equal(missingStatus.statusCode, 200);
+    assert.equal(missingStatus.json().state, "missing");
+    assert.equal(missingStatus.json().downloadUrl, null);
+    assert.equal(await readFile(artifactPath).then(() => true).catch(() => false), false);
+
+    // 2. A build request in a host without the Android SDK must fail with an
+    //    actionable configuration error rather than writing an APK-like file.
+    // Force the "no SDK on this host" case so the assertion is deterministic
+    // and never overwrites a verified release artifact during a test run.
+    const savedAndroidHome = process.env.ANDROID_HOME;
+    const savedAndroidSdkRoot = process.env.ANDROID_SDK_ROOT;
+    delete process.env.ANDROID_HOME;
+    delete process.env.ANDROID_SDK_ROOT;
+    try {
+      const build = await app.inject({
+        method: "POST",
+        url: "/v1/platform/apk/build",
+        headers,
+        payload: { versionName: "1.0.0", versionCode: 1 },
+      });
+      assert.equal(build.statusCode, 409, build.body);
+      assert.equal(build.json().error, "apk_build_unavailable");
+      assert.ok(build.json().details.instructions.length > 0);
+      assert.equal(await readFile(artifactPath).then(() => true).catch(() => false), false);
+    } finally {
+      if (savedAndroidHome !== undefined) process.env.ANDROID_HOME = savedAndroidHome;
+      if (savedAndroidSdkRoot !== undefined) process.env.ANDROID_SDK_ROOT = savedAndroidSdkRoot;
     }
 
-    // 1. Verify resources.arsc and mipmap icons are uncompressed (STORE=0) and 4-byte aligned (zipalign 4)
-    for (const alignedEntry of [
-      "resources.arsc",
-      "res/mipmap-mdpi/ic_launcher.png",
-      "res/mipmap-hdpi/ic_launcher.png",
-      "res/mipmap-xhdpi/ic_launcher.png",
-      "res/mipmap-xxhdpi/ic_launcher.png",
-      "res/mipmap-xxxhdpi/ic_launcher.png",
-    ]) {
-      const e = entries.get(alignedEntry);
-      assert.ok(e, `Missing APK entry ${alignedEntry}`);
-      assert.equal(e.method, 0, `${alignedEntry} must be stored uncompressed`);
-      assert.equal(
-        e.dataOffset % 4,
-        0,
-        `${alignedEntry} data offset (${e.dataOffset}) must be 4-byte zipaligned`
-      );
-    }
-
-    // 2. Verify AndroidManifest.xml is compiled binary AXML (RES_XML_TYPE = 0x0003), NOT plain text XML
-    const manifest = entries.get("AndroidManifest.xml")!.data;
-    assert.equal(manifest.readUInt16LE(0), 0x0003); // RES_XML_TYPE
-    assert.equal(manifest.readUInt16LE(2), 0x0008); // headerSize = 8
-    assert.equal(manifest.readUInt32LE(4), manifest.length);
-    assert.equal(manifest.readUInt16LE(8), 0x0001); // RES_STRING_POOL_TYPE
-    const spSize = manifest.readUInt32LE(12);
-    const resMapOff = 8 + spSize;
-    assert.equal(manifest.readUInt16LE(resMapOff), 0x0180); // RES_XML_RESOURCE_MAP_TYPE
-    assert.equal(manifest.readUInt32LE(resMapOff + 8), 0x01010001); // android:label
-
-    // Android resolves namespaced attributes through the resource map, not merely
-    // their string names. Verify MainActivity's exported bit uses Android's real
-    // android.R.attr.exported ID (0x01010010) and an explicit boolean true value.
-    const stringCount = manifest.readUInt32LE(16);
-    const stringsStart = 8 + manifest.readUInt32LE(28);
-    const strings = Array.from({ length: stringCount }, (_, index) => {
-      const relativeOffset = manifest.readUInt32LE(36 + index * 4);
-      const offset = stringsStart + relativeOffset;
-      const length = manifest.readUInt16LE(offset);
-      return manifest.subarray(offset + 2, offset + 2 + length * 2).toString("utf16le");
-    });
-    let exportedAttribute: { nameIndex: number; type: number; value: number } | null = null;
-    for (let nodeOff = resMapOff + manifest.readUInt32LE(resMapOff + 4); nodeOff < manifest.length;) {
-      const nodeType = manifest.readUInt16LE(nodeOff);
-      const nodeSize = manifest.readUInt32LE(nodeOff + 4);
-      if (nodeType === 0x0102 && strings[manifest.readUInt32LE(nodeOff + 20)] === "activity") {
-        const attributeCount = manifest.readUInt16LE(nodeOff + 28);
-        for (let index = 0; index < attributeCount; index += 1) {
-          const attributeOff = nodeOff + 36 + index * 20;
-          const nameIndex = manifest.readUInt32LE(attributeOff + 4);
-          if (strings[nameIndex] === "exported") {
-            exportedAttribute = {
-              nameIndex,
-              type: manifest.readUInt8(attributeOff + 15),
-              value: manifest.readUInt32LE(attributeOff + 16),
-            };
-          }
-        }
-      }
-      if (nodeSize < 8) throw new Error("Malformed AXML node in verification test");
-      nodeOff += nodeSize;
-    }
-    assert.ok(exportedAttribute, "MainActivity must have an explicit android:exported attribute");
-    assert.equal(exportedAttribute.type, 0x12); // TYPE_INT_BOOLEAN
-    assert.equal(exportedAttribute.value, 0xffffffff);
-    assert.equal(manifest.readUInt32LE(resMapOff + 8 + exportedAttribute.nameIndex * 4), 0x01010010);
-
-    // 3. Verify resources.arsc is a compiled resource table (RES_TABLE_TYPE = 0x0002) with package 0x7f
-    const arsc = entries.get("resources.arsc")!.data;
-    assert.equal(arsc.readUInt16LE(0), 0x0002); // RES_TABLE_TYPE
-    assert.equal(arsc.readUInt32LE(4), arsc.length);
-    assert.equal(arsc.readUInt32LE(8), 1); // packageCount = 1
-
-    // 4. Verify classes.dex header, SHA-1 signature, Adler-32 checksum, and MainActivity bytecode
-    const dex = entries.get("classes.dex")!.data;
-    assert.equal(dex.subarray(0, 8).toString("ascii"), "dex\n035\0");
-    assert.equal(dex.readUInt32LE(32), dex.length);
-    const expectedSha1 = createHash("sha1").update(dex.subarray(32)).digest();
-    assert.deepEqual(dex.subarray(12, 32), expectedSha1);
-    assert.equal(dex.readUInt32LE(96), 1); // class_defs_size = 1
-    assert.ok(dex.includes(Buffer.from("Lcom/marrybase/platform/MainActivity;")));
-    assert.ok(dex.includes(Buffer.from("Landroid/webkit/WebView;")));
-    for (const method of [
-      "setJavaScriptEnabled",
-      "setDomStorageEnabled",
-      "setAllowUniversalAccessFromFileURLs",
-      "setWebViewClient",
-      "setWebChromeClient",
-      "onBackPressed",
-      "canGoBack",
-      "goBack",
-    ]) {
-      assert.ok(dex.includes(Buffer.from(method)), `MainActivity DEX must include ${method}`);
-    }
-    const mobileHtml = entries.get("assets/www/index.html")!.data.toString("utf8");
-    const mobileConfig = entries.get("assets/www/config.js")!.data.toString("utf8");
-    assert.match(mobileHtml, /Content-Security-Policy/);
-    assert.match(mobileHtml, /Connect & open Studio|Connect &amp; open Studio/);
-    assert.match(mobileConfig, /__MARRY_BASE_CONFIG__/);
-    assert.ok(entries.has("assets/www/styles.css"));
-    assert.ok(entries.has("assets/www/app.js"));
-    assert.ok(entries.has("assets/www/app-icon.png"));
-
-    // 5. Verify META-INF/MARRYBAS.RSA is an ASN.1 DER PKCS#7 SignedData structure (OID 1.2.840.113549.1.7.2)
-    const rsa = entries.get("META-INF/MARRYBAS.RSA")!.data;
-    assert.equal(rsa[0], 0x30); // ASN.1 SEQUENCE
-    assert.ok(
-      rsa.includes(Buffer.from("2a864886f70d010702", "hex")),
-      "MARRYBAS.RSA must contain PKCS#7 SignedData OID"
-    );
-    assert.ok(
-      rsa.includes(Buffer.from("MARRY BASE Platform", "utf8")),
-      "MARRYBAS.RSA must embed X.509 certificate for MARRY BASE Platform"
-    );
+    // 3. A corrupted, non-ZIP file placed at the artifact path must be rejected
+    //    as invalid, not served.
+    await writeFile(artifactPath, Buffer.from("this is not an android package", "utf8"));
+    const invalidStatus = await app.inject({ method: "GET", url: "/v1/platform/apk/status", headers });
+    assert.equal(invalidStatus.json().state, "invalid");
+    assert.ok(invalidStatus.json().verification.problems.length > 0);
+    const invalidDownload = await app.inject({ method: "GET", url: "/v1/platform/apk/download" });
+    assert.equal(invalidDownload.statusCode, 404);
   } finally {
+    if (backups.artifact) {
+      await writeFile(artifactPath, backups.artifact);
+      if (backups.metadata) await writeFile(metadataPath, backups.metadata);
+    } else {
+      await rm(artifactPath, { force: true });
+      await rm(metadataPath, { force: true });
+    }
     await app.close();
   }
 });

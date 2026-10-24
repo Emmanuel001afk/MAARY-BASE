@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 const DASHBOARD_DIR = resolve(process.cwd(), "public", "dashboard");
+const MOBILE_DIR = resolve(process.cwd(), "public", "mobile");
 
 const DASHBOARD_ASSETS = {
   "/dashboard/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
@@ -38,6 +39,28 @@ export async function registerDashboardRoutes(
     app.get(route, async (_request, reply) =>
       sendDashboardAsset(reply, asset.file, asset.type)
     );
+  }
+
+  // The mobile connection hub is also usable in a mobile browser. The Android
+  // app has its own native equivalent; both validate /ready before proceeding.
+  const mobileAssets = {
+    "/mobile/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/mobile/app.js": { file: "app.js", type: "application/javascript; charset=utf-8" },
+    "/mobile/config.js": { file: "config.js", type: "application/javascript; charset=utf-8" },
+    "/mobile/app-icon.png": { file: "app-icon.png", type: "image/png" },
+  } as const;
+
+  const serveMobileIndex = async (_request: unknown, reply: FastifyReply) => {
+    const contents = await readFile(resolve(MOBILE_DIR, "index.html"));
+    return reply.header("content-type", "text/html; charset=utf-8").send(contents);
+  };
+  app.get("/mobile", serveMobileIndex);
+  app.get("/mobile/", serveMobileIndex);
+  for (const [route, asset] of Object.entries(mobileAssets)) {
+    app.get(route, async (_request, reply) => {
+      const contents = await readFile(resolve(MOBILE_DIR, asset.file));
+      return reply.header("content-type", asset.type).send(contents);
+    });
   }
 
   app.get("/dashboard/logo.png", async (_request, reply) => {

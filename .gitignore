@@ -8,3 +8,13 @@ data/
 storage/
 *.log
 .DS_Store
+releases/*.apk
+releases/*.apk.json
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+.android-sdk/
+*.keystore
+!android/gradle/wrapper/gradle-wrapper.jar

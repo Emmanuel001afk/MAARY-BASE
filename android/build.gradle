@@ -1,15 +1,12 @@
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath "com.android.tools.build:gradle:8.2.2"
-    }
+plugins {
+    id "com.android.application" version "8.2.2" apply false
 }
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
+
+// Release identity is injected by CI (`-PversionCode`, `-PversionName`) or read
+// from gradle.properties for local builds. Keeping these out of the source
+// variant avoids rewriting tracked files for every build.
+tasks.register("printVersion") {
+    doLast {
+        println "versionName=${project.findProperty('marryVersionName') ?: '1.0.0'}"
     }
 }

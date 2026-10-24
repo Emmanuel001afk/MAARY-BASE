@@ -47,17 +47,14 @@ const schema = z.object({
     .string()
     .min(16)
     .default("maary-base-dev-encryption-master-key-change-in-prod-32b"),
-  APK_SIGNING_PRIVATE_KEY: z.string().optional(),
-  APK_SIGNING_KEY_FILE: z
-    .string()
-    .default(
-      join(
-        process.cwd(),
-        isTestRunner
-          ? "data/test-apk-signing/private-key.pem"
-          : "data/apk-signing/private-key.pem"
-      )
-    ),
+  APP_VERSION: z.string().default("1.1.0"),
+  APP_COMMIT: z.string().optional(),
+  // Android companion artifact produced by the Gradle pipeline (never synthesized).
+  ANDROID_PROJECT_DIR: z.string().default("android"),
+  APK_ARTIFACT_PATH: z.string().default("releases/marry-base.apk"),
+  APK_METADATA_PATH: z.string().default("releases/marry-base.apk.json"),
+  APK_BUILD_TIMEOUT_MS: z.coerce.number().int().min(30_000).default(900_000),
+  JAVA_BIN: z.string().default("java"),
   STORAGE_BACKEND: z.enum(["local", "s3"]).default("local"),
   STORAGE_DIR: z
     .string()

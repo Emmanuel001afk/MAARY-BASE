@@ -1,7 +1,7 @@
 import { buildApp } from "./app.js";
 import { config } from "./config.js";
 import { closeDatabase } from "./db/pool.js";
-import { getOrBuildDefaultApk } from "./services/apk.service.js";
+import { getApkStatus } from "./services/apk.service.js";
 
 const app = await buildApp();
 
@@ -21,14 +21,18 @@ process.once("SIGINT", () => void shutdown("SIGINT"));
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
 try {
-  const { info: apkInfo } = await getOrBuildDefaultApk();
+  const apk = await getApkStatus();
   app.log.info(
     {
       platform: "MARRY BASE",
-      apkFile: apkInfo.filePath,
-      apkSha256: apkInfo.checksumSha256,
+      apkState: apk.state,
+      apkFile: apk.artifact.filePath,
+      apkSha256: apk.artifact.checksumSha256,
+      gradleBuildPossible: apk.buildEnvironment.gradleBuildPossible,
     },
-    "MARRY BASE Android APK initialized and verified"
+    apk.state === "available"
+      ? "MARRY BASE Android artifact verified"
+      : "MARRY BASE Android artifact is not present; the API reports this instead of fabricating one"
   );
   await app.listen({ host: config.HOST, port: config.PORT });
 } catch (error) {
