@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { getMigrationStatus, runMigrations } from "../db/migrate.js";
 import { closeDatabase, pool } from "../db/pool.js";
-import { buildMarryBaseApk } from "../services/apk.service.js";
+import { buildApkWithGradle, getApkStatus } from "../services/apk.service.js";
 import {
   createDatabaseBackup,
   listDatabaseBackups,
@@ -52,7 +52,7 @@ export async function runCli(argv: string[]): Promise<{
           "secrets set <projectSlug> <NAME> <VALUE> | secrets list <projectSlug>",
           "functions deploy <projectSlug> <fnSlug> <codeOrFile> | functions invoke <projectSlug> <fnSlug> [jsonBody]",
           "backup create [projectSlug] | backup list [projectSlug] | backup verify <backupId> | backup restore <backupId>",
-          "apk build [projectSlug] [serverUrl]",
+          "apk status | apk build [versionName] [versionCode]",
         ],
       },
     };
@@ -268,14 +268,18 @@ export async function runCli(argv: string[]): Promise<{
     }
   }
 
-  if (group === "apk" || group === "apk:build") {
-    const projectSlug = subcommand === "build" ? rest[0] : subcommand;
-    const serverUrl = subcommand === "build" ? rest[1] : rest[0];
-    const apk = await buildMarryBaseApk({
-      projectSlug: projectSlug || undefined,
-      serverUrl: serverUrl || undefined,
-    });
-    return { exitCode: 0, output: { status: "apk_built", apk } };
+  if (group === "apk") {
+    if (subcommand === "build" || subcommand === "apk:build") {
+      const versionName = rest[0];
+      const versionCode = rest[1] ? Number(rest[1]) : undefined;
+      const result = await buildApkWithGradle({ versionName, versionCode });
+      return {
+        exitCode: 0,
+        output: { status: "apk_built", artifact: result.artifact, durationMs: result.durationMs },
+      };
+    }
+    const status = await getApkStatus();
+    return { exitCode: 0, output: { status: status.statusLabel, apk: status } };
   }
 
   throw new Error(`Unknown CLI command '${group} ${subcommand ?? ""}'.`);
@@ -296,6 +300,9 @@ if (isMain) {
     })
     .catch(async (err) => {
       console.error("CLI Error:", err?.message ?? err);
+      if (err?.details && Object.keys(err.details).length > 0) {
+        console.error(JSON.stringify(err.details, null, 2));
+      }
       await closeDatabase();
       process.exitCode = 1;
     });

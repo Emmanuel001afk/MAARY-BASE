@@ -152,24 +152,32 @@
             <span class="project-mark"><svg class="icon"><use href="#i-layers"></use></svg></span>
             <div><small>Active workspace</small><strong id="sidebar-project-name">No project selected</strong></div>
           </div>
-          <nav class="sidebar-nav">
+          <nav class="sidebar-nav" aria-label="Studio sections">
             <span class="nav-label">Workspace</span>
             <button class="nav-item active" data-tab="overview"><svg class="icon"><use href="#i-overview"></use></svg><span>Overview</span></button>
-            <span class="nav-label">Build</span>
-            <button class="nav-item" data-tab="database"><svg class="icon"><use href="#i-database"></use></svg><span>Database</span></button>
-            <button class="nav-item" data-tab="sql"><svg class="icon"><use href="#i-code"></use></svg><span>SQL & RLS</span></button>
+            <span class="nav-label">Database</span>
+            <button class="nav-item" data-tab="database"><svg class="icon"><use href="#i-table"></use></svg><span>Tables &amp; rows</span></button>
+            <button class="nav-item" data-tab="sql"><svg class="icon"><use href="#i-code"></use></svg><span>SQL editor</span></button>
             <button class="nav-item" data-tab="migrations"><svg class="icon"><use href="#i-layers"></use></svg><span>Migrations</span></button>
+            <button class="nav-item" data-tab="access"><svg class="icon"><use href="#i-shield"></use></svg><span>Roles &amp; RLS</span></button>
+            <span class="nav-label">Build</span>
             <button class="nav-item" data-tab="auth"><svg class="icon"><use href="#i-users"></use></svg><span>Authentication</span></button>
+            <button class="nav-item" data-tab="api"><svg class="icon"><use href="#i-link"></use></svg><span>API</span></button>
             <button class="nav-item" data-tab="storage"><svg class="icon"><use href="#i-storage"></use></svg><span>Storage</span></button>
-            <button class="nav-item" data-tab="functions"><svg class="icon"><use href="#i-function"></use></svg><span>Functions & Jobs</span></button>
             <button class="nav-item" data-tab="realtime"><svg class="icon"><use href="#i-realtime"></use></svg><span>Realtime</span><span id="realtime-nav-dot" class="nav-live hidden"></span></button>
-            <span class="nav-label">Manage</span>
-            <button class="nav-item" data-tab="security"><svg class="icon"><use href="#i-shield"></use></svg><span>Security & Team</span></button>
-            <button class="nav-item" data-tab="operations"><svg class="icon"><use href="#i-settings"></use></svg><span>Operations</span></button>
+            <button class="nav-item" data-tab="functions"><svg class="icon"><use href="#i-function"></use></svg><span>Functions</span></button>
+            <button class="nav-item" data-tab="jobs"><svg class="icon"><use href="#i-clock"></use></svg><span>Jobs &amp; schedules</span></button>
+            <span class="nav-label">Observe</span>
+            <button class="nav-item" data-tab="logs"><svg class="icon"><use href="#i-terminal"></use></svg><span>Logs &amp; diagnostics</span></button>
+            <button class="nav-item" data-tab="backups"><svg class="icon"><use href="#i-download"></use></svg><span>Backups &amp; recovery</span></button>
+            <span class="nav-label">Configure</span>
+            <button class="nav-item" data-tab="settings"><svg class="icon"><use href="#i-settings"></use></svg><span>Project settings</span></button>
+            <button class="nav-item" data-tab="platform"><svg class="icon"><use href="#i-layers"></use></svg><span>Platform admin</span></button>
+            <button class="nav-item" data-tab="docs"><svg class="icon"><use href="#i-file"></use></svg><span>SDK, CLI &amp; docs</span></button>
           </nav>
           <div class="sidebar-footer">
             <div class="sidebar-status"><span class="status-dot"></span><span>All systems self-hosted</span></div>
-            <div class="sidebar-meta"><span>MARRY BASE</span><span>v1.0.0</span></div>
+            <div class="sidebar-meta"><span>MARRY BASE</span><span id="sidebar-version">v1.1.0</span></div>
           </div>
         </aside>
 
@@ -209,6 +217,14 @@
         <div class="dialog-body"><div class="notice warning"><svg class="icon"><use href="#i-alert"></use></svg><p>Treat credentials like passwords. Never expose service-role keys in browser or mobile applications.</p></div><pre id="credential-value" class="code-block credential-value"></pre></div>
         <div class="dialog-footer"><button type="button" class="btn btn-secondary" data-close-dialog="credential-dialog">Done</button><button type="button" class="btn btn-primary" data-action="copy-credential"><svg class="icon"><use href="#i-copy"></use></svg>Copy credentials</button></div>
       </div>
+    </dialog>
+
+    <dialog id="row-dialog" class="dialog">
+      <form id="row-edit-form" class="dialog-card" method="dialog">
+        <div class="dialog-header"><div class="dialog-icon"><svg class="icon"><use href="#i-table"></use></svg></div><div><h2 id="row-dialog-title">Edit row</h2><p>Only the columns you change are sent to the data API.</p></div><button type="button" class="icon-btn" data-close-dialog="row-dialog" aria-label="Close"><svg class="icon"><use href="#i-close"></use></svg></button></div>
+        <div class="dialog-body"><div class="field"><label for="row-edit-json">Row JSON</label><textarea id="row-edit-json" class="code-input" rows="10" spellcheck="false"></textarea></div></div>
+        <div class="dialog-footer"><button type="button" class="btn btn-secondary" data-close-dialog="row-dialog">Cancel</button><button type="submit" class="btn btn-primary">Save row</button></div>
+      </form>
     </dialog>
 
     <dialog id="command-dialog" class="dialog command-dialog">

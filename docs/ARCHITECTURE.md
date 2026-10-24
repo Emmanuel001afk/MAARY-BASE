@@ -39,12 +39,24 @@ All studio API calls remain same-origin and use the existing control-plane autho
 
 ### Android Client & APK Artifact Boundaries
 
-The mobile hub is a separate static client under `public/mobile/`. Its CSP permits local scripts/styles and HTTP(S) readiness requests but no inline script. `config.js` is generated as escaped JSON data for each APK; the HTML remains configuration-independent. The hub stores only the last working server URL in WebView local storage, then hands authentication and project workflows to the full Management Studio.
+The Android companion is a native connection client plus a WebView that hosts the Management Studio
+served by the connected instance. Device-side code (`android/app/src/main/java/com/marrybase/platform/`)
+owns address validation, readiness probing, persistence and TLS policy; it does not re-implement
+project workflows and stores no credentials. The studio itself is the same dependency-free static
+app described above, so mobile and desktop operators see one implementation.
 
-`src/services/apk.service.ts` compiles binary Android XML/resources and the actual `MainActivity` DEX. The activity enables JavaScript, DOM storage, trusted local-client network access, WebView/Chrome clients, and WebView history navigation. This generated DEX—not only the readable Gradle source under `android/`—is what the downloadable APK executes. Android backups are disabled so WebView authentication storage is not exported through OS backup.
+`src/services/apk.service.ts` never builds or patches Android packages. It inspects an artifact
+produced by the real Gradle/AGP project under `android/` (usually by CI), reports structural
+verification (ZIP entries, `AndroidManifest.xml`, `classes.dex`, packaged resources, signature
+evidence), computes its SHA-256 and serves it. `POST /v1/platform/apk/build` shells out to
+`android/gradlew :app:assembleDebug` only when a JDK, the Gradle wrapper and the Android SDK are all
+present; otherwise it returns `409 apk_build_unavailable` with the missing prerequisites. There is
+no ZIP assembly, hand-written DEX or fabricated signature anywhere in the server.
 
-Default and project APKs have distinct artifact lifecycles. A project build writes only `releases/marry-base-<slug>.apk`; subsequent `GET /v1/platform/apk/download?projectSlug=<slug>` requests read that exact signed file. Missing artifacts return 404 instead of silently rebuilding with default configuration. Slugs, server URLs, version names, and version codes are validated before packaging.
-
+Artifacts are instance-wide: `GET /v1/platform/apk/download` serves the verified file at
+`APK_ARTIFACT_PATH` with its checksum header, and returns `404` with an actionable message when the
+artifact is absent or fails verification. Project-specific APK templating was removed with the
+fabrication code; configuration is performed inside the app against any reachable instance.
 ---
 
 ## 2. Multi-Project Isolation & PostgreSQL Row-Level Security

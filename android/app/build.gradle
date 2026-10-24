@@ -2,6 +2,9 @@ plugins {
     id "com.android.application"
 }
 
+def marryVersionCode = (project.findProperty("marryVersionCode") ?: "1").toInteger()
+def marryVersionName = project.findProperty("marryVersionName") ?: "1.0.0"
+
 android {
     namespace "com.marrybase.platform"
     compileSdk 34
@@ -10,29 +13,46 @@ android {
         applicationId "com.marrybase.platform"
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName "1.0.0"
+        versionCode marryVersionCode
+        versionName marryVersionName
+        // The Studio is served by the connected MARRY BASE server; only the
+        // connection hub and its validation logic live on the device.
+        buildConfigField "String", "DEFAULT_SERVER_URL", "\"${project.findProperty('marryDefaultServer') ?: ''}\""
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix ""
+        }
         release {
             minifyEnabled false
+            // Release signing is supplied by the operator (see docs/ANDROID.md).
+            // CI falls back to the debug key so the artifact is installable and
+            // its signature is verifiable with apksigner.
+            signingConfig signingConfigs.debug
         }
     }
 
-    // Package the same CSP-friendly mobile hub used by the downloadable builder.
-    sourceSets {
-        main.assets.srcDir(layout.buildDirectory.dir("generated/mobileAssets"))
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+
+    lint {
+        abortOnError true
+        warningsAsErrors false
+        checkReleaseBuilds false
     }
 }
 
-def mobileAssetsDir = layout.buildDirectory.dir("generated/mobileAssets")
-tasks.register("syncMobileClient", Copy) {
-    from("../../public/mobile") {
-        into "www"
-    }
-    into mobileAssetsDir
-}
-tasks.named("preBuild") {
-    dependsOn("syncMobileClient")
+dependencies {
+    testImplementation "junit:junit:4.13.2"
 }

@@ -1,15 +1,17 @@
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { access, constants, mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getMigrationStatus } from "../db/migrate.js";
 import { pool } from "../db/pool.js";
 import { ValidationError } from "../lib/errors.js";
+import { config } from "../config.js";
 import { requirePlatformUser } from "../middleware/auth.middleware.js";
 import {
-  buildMarryBaseApk,
-  getBuiltProjectApk,
-  getOrBuildDefaultApk,
+  buildApkWithGradle,
+  getApkStatus,
+  loadApkForDownload,
 } from "../services/apk.service.js";
 import { listAuditEvents } from "../services/audit.service.js";
 import {
@@ -22,6 +24,7 @@ import {
   enableDatabaseExtension,
   listDatabaseExtensions,
 } from "../services/database.service.js";
+import { workerSupervisor } from "../services/functions-jobs.service.js";
 import {
   listPlatformUsers,
   loginPlatformUser,
@@ -46,49 +49,149 @@ export async function registerPlatformRoutes(
 ): Promise<void> {
   app.get("/v1/platform", async () => {
     const poolStats = pool.getStats();
+    let databaseReachable = true;
     let migrationInfo = { appliedCount: 0, pendingCount: 0 };
     try {
+      await pool.query("SELECT 1");
       const mig = await getMigrationStatus();
       migrationInfo = {
         appliedCount: mig.applied.length,
         pendingCount: mig.pending.length,
       };
     } catch {
-      // Ignore if DB not yet queried
+      databaseReachable = false;
     }
+
+    const storageWritable = await (async () => {
+      try {
+        await mkdir(config.STORAGE_DIR, { recursive: true });
+        await access(config.STORAGE_DIR, constants.W_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+
+    const workerRunning = workerSupervisor.isRunning();
+    const apk = await getApkStatus();
+
+    // Public service states are derived from the same control-plane data as the
+    // authenticated status page; nothing here is hard-coded to "operational".
+    const counts = await (async () => {
+      const result = {
+        projectTables: 0,
+        tablesWithoutRls: 0,
+        realtimeEvents: 0,
+        functionsDeployed: 0,
+        functionInvocations: 0,
+        backups: 0,
+        restoredBackups: 0,
+      };
+      if (!databaseReachable) return result;
+      try {
+        const [tables, unsecured, events, functions, invocations, backups, restored] = await Promise.all([
+          pool.query<{ count: string }>(
+            "SELECT COUNT(*)::text AS count FROM information_schema.tables WHERE table_schema LIKE 'proj\\_%' AND table_type = 'BASE TABLE'"
+          ),
+          pool.query<{ count: string }>(
+            "SELECT COUNT(*)::text AS count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname LIKE 'proj\\_%' AND c.relkind = 'r' AND NOT c.relrowsecurity"
+          ),
+          pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM platform_realtime_events"),
+          pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM platform_functions"),
+          pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM platform_function_logs"),
+          pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM platform_backups"),
+          pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM platform_backups WHERE restored_at IS NOT NULL"),
+        ]);
+        result.projectTables = Number(tables.rows[0]?.count ?? 0);
+        result.tablesWithoutRls = Number(unsecured.rows[0]?.count ?? 0);
+        result.realtimeEvents = Number(events.rows[0]?.count ?? 0);
+        result.functionsDeployed = Number(functions.rows[0]?.count ?? 0);
+        result.functionInvocations = Number(invocations.rows[0]?.count ?? 0);
+        result.backups = Number(backups.rows[0]?.count ?? 0);
+        result.restoredBackups = Number(restored.rows[0]?.count ?? 0);
+      } catch {
+        // Counts are best-effort; database health is already reported.
+      }
+      return result;
+    })();
+
+    const overallHealthy =
+      databaseReachable &&
+      migrationInfo.pendingCount === 0 &&
+      storageWritable &&
+      workerRunning;
 
     return {
       name: "MARRY BASE",
       aliases: ["MAARY BASE"],
-      version: "1.0.0",
-      status: "operational",
+      version: config.APP_VERSION,
+      commit: config.APP_COMMIT ?? process.env.GIT_COMMIT ?? null,
+      status: overallHealthy ? "operational" : "degraded",
+      statusDetail:
+        "Public health summary derived from live checks (database, migrations, storage, worker). Feature-level states reflect this instance's configuration; authenticated operators should use /v1/platform/status and /v1/projects/:ref/status for the full report.",
       branding: {
         logoPngUrl: "/v1/platform/logo",
         logoSvgUrl: "/v1/platform/logo.svg",
         appIconPngUrl: "/v1/platform/app-icon",
         appIconSvgUrl: "/v1/platform/app-icon.svg",
-        apkDownloadUrl: "/v1/platform/apk/download",
+        apkDownloadUrl: apk.state === "available" ? "/v1/platform/apk/download" : null,
       },
       database: {
         engine: "PostgreSQL",
         mode: poolStats.mode,
-        status: "operational",
+        status: databaseReachable ? "operational" : "unavailable",
         migrations: migrationInfo,
       },
-      modules: {
-        controlPlane: "operational",
-        databaseApi: "operational",
-        authentication: "operational",
-        projectIsolation: "operational",
-        rowLevelSecurity: "operational",
-        objectStorage: "operational",
-        realtime: "operational",
-        serverFunctions: "operational",
-        backgroundJobs: "operational",
-        backupsAndRecovery: "operational",
-        administrationDashboard: "operational",
-        cliAndSdk: "operational",
-        mobileApkBuilder: "operational",
+      services: {
+        controlPlane: databaseReachable ? "operational" : "unavailable",
+        dataApi: databaseReachable ? "operational" : "unavailable",
+        authentication: databaseReachable ? "operational" : "unavailable",
+        rowLevelSecurity: !databaseReachable
+          ? "unavailable"
+          : counts.tablesWithoutRls > 0
+            ? "partially_implemented"
+            : "operational",
+        objectStorage: storageWritable ? "operational" : "requires_configuration",
+        realtime: !databaseReachable
+          ? "unavailable"
+          : counts.realtimeEvents > 0
+            ? "operational"
+            : "implemented_unverified",
+        serverFunctions: !databaseReachable
+          ? "unavailable"
+          : counts.functionsDeployed === 0
+            ? "requires_configuration"
+            : counts.functionInvocations > 0
+              ? "operational"
+              : "implemented_unverified",
+        backgroundJobs: workerRunning ? "operational" : "requires_configuration",
+        backupsAndRecovery: !storageWritable
+          ? "requires_configuration"
+          : counts.backups === 0
+            ? "requires_configuration"
+            : counts.restoredBackups > 0
+              ? "operational"
+              : "implemented_unverified",
+        managementStudio: existsSync(resolve(process.cwd(), "public", "dashboard", "index.html"))
+          ? "operational"
+          : "unavailable",
+        cliAndSdk: existsSync(resolve(process.cwd(), "src", "sdk", "index.ts")) ||
+          existsSync(resolve(process.cwd(), "dist", "sdk", "index.js"))
+          ? "operational"
+          : "unavailable",
+        androidCompanion: apk.state,
+      },
+      android: {
+        state: apk.state,
+        statusLabel: apk.statusLabel,
+        summary: apk.summary,
+        buildEnvironment: apk.buildEnvironment,
+      },
+      endpoints: {
+        health: "/health",
+        readiness: "/ready",
+        metrics: "/v1/metrics",
+        status: "/v1/platform/status",
       },
     };
   });
@@ -118,48 +221,33 @@ export async function registerPlatformRoutes(
     return reply.header("content-type", "image/svg+xml").send(buf);
   });
 
-  // APK Build & Download Endpoints
+  // Android Artifact Endpoints (real Gradle artifact; status is derived, never faked)
+  app.get("/v1/platform/apk/status", async (request) => {
+    await requirePlatformUser(request);
+    return getApkStatus();
+  });
+
   app.post("/v1/platform/apk/build", async (request, reply) => {
     const user = await requirePlatformUser(request);
     const body = (request.body ?? {}) as {
-      projectSlug?: string;
-      serverUrl?: string;
       versionName?: string;
       versionCode?: number;
     };
-    const apk = await buildMarryBaseApk({
-      projectSlug: body.projectSlug,
-      serverUrl: body.serverUrl,
+    const result = await buildApkWithGradle({
       versionName: body.versionName,
       versionCode: body.versionCode,
       actorId: user?.id ?? null,
     });
-    return reply.code(201).send({
-      apk: {
-        ...apk,
-        downloadUrl: `/v1/platform/apk/download${apk.projectSlug ? `?projectSlug=${encodeURIComponent(apk.projectSlug)}` : ""}`,
-      },
-    });
+    const status = await getApkStatus();
+    return reply.code(201).send({ build: result, status });
   });
 
   app.get("/v1/platform/apk/download", async (request, reply) => {
-    const q = (request.query ?? {}) as { projectSlug?: string };
-    if (q.projectSlug) {
-      const artifact = await getBuiltProjectApk(q.projectSlug);
-      return reply
-        .header("content-type", "application/vnd.android.package-archive")
-        .header(
-          "content-disposition",
-          `attachment; filename="${artifact.fileName}"`
-        )
-        .header("x-apk-sha256", artifact.checksumSha256)
-        .send(artifact.buffer);
-    }
-    const { info, buffer } = await getOrBuildDefaultApk();
+    const { buffer, info } = await loadApkForDownload();
     return reply
       .header("content-type", "application/vnd.android.package-archive")
       .header("content-disposition", `attachment; filename="${info.fileName}"`)
-      .header("x-apk-sha256", info.checksumSha256)
+      .header("x-apk-sha256", info.checksumSha256 ?? "")
       .send(buffer);
   });
 

@@ -11,6 +11,7 @@ import { registerDataApiRoutes } from "./routes/data-api.js";
 import { registerDatabaseRoutes } from "./routes/database.js";
 import { registerFunctionsAndJobsRoutes } from "./routes/functions-jobs.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerObservabilityRoutes } from "./routes/observability.js";
 import { registerPlatformRoutes } from "./routes/platform.js";
 import { registerProjectAuthRoutes } from "./routes/project-auth.js";
 import { registerProjectRoutes } from "./routes/projects.js";
@@ -126,6 +127,7 @@ export async function buildApp() {
 
   await registerDashboardRoutes(app);
   await registerHealthRoutes(app);
+  await registerObservabilityRoutes(app);
   await registerPlatformRoutes(app);
   await registerProjectRoutes(app);
   await registerDatabaseRoutes(app);

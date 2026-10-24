@@ -19,7 +19,7 @@ const commands = [
   { id: "new-project", group: "Actions", title: "Create a new project", description: "Provision an isolated backend", icon: "plus" },
   { id: "refresh", group: "Actions", title: "Refresh current view", description: "Fetch the latest project data", icon: "refresh" },
   { id: "theme", group: "Actions", title: "Toggle color theme", description: "Switch between dark and light mode", icon: "sun" },
-  { id: "apk", group: "Actions", title: "Download Android APK", description: "Get the default signed mobile package", icon: "download" },
+  { id: "apk", group: "Actions", title: "Android companion", description: "Open build status and download the Gradle-built APK", icon: "download" },
   { id: "logout", group: "Account", title: "Sign out", description: "End this operator session", icon: "logout" },
 ];
 
@@ -83,6 +83,19 @@ function showStudio() {
   $("current-user-label").textContent = state.user?.email || "Operator";
   $("current-user-label").title = state.user?.is_superadmin ? `${state.user.email} · Superadmin` : state.user?.email || "";
   $("user-avatar").textContent = initials(state.user);
+  void loadVersionLabel();
+}
+
+async function loadVersionLabel() {
+  const label = $("sidebar-version");
+  if (!label) return;
+  try {
+    const version = await api("/v1/platform/version", { timeout: 8_000 });
+    if (version?.version) label.textContent = `v${version.version}`;
+    label.title = version?.commit ? `Commit ${version.commit}` : "Installed platform version";
+  } catch {
+    label.title = "Version unavailable — the server did not answer the version endpoint.";
+  }
 }
 
 async function checkHealth() {
@@ -274,7 +287,7 @@ async function runCommand(index) {
     case "new-project": openNewProject(); break;
     case "refresh": await loadPage(); showToast("View refreshed."); break;
     case "theme": applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"); break;
-    case "apk": window.location.href = "/v1/platform/apk/download"; break;
+    case "apk": navigate("platform"); break;
     case "logout": await logout(); break;
     default: break;
   }

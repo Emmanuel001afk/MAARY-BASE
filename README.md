@@ -1,44 +1,51 @@
 # MARRY BASE
 
 <p align="center">
-  <img src="assets/logo.png" alt="MARRY BASE Official Logo" width="180" />
+  <img src="assets/logo.png" alt="MARRY BASE official logo" width="180" />
 </p>
 
-**MARRY BASE** (also aliased as `MAARY BASE`) is an independent, self-hostable, general-purpose backend platform built on PostgreSQL and TypeScript/Fastify. It provides an integrated control plane, multi-project schema and role isolation, native PostgreSQL Row-Level Security (RLS), authentication and identity management, auto-generated REST and RPC Data APIs, object storage, WebSocket realtime subscriptions, isolated server functions, background job queues, logical backups and restoration, a web management studio, a CLI, a TypeScript SDK, and an integrated **Android `.apk` builder & packager**.
+**MARRY BASE** (also written `MAARY BASE`) is an independent, self-hostable backend platform built on PostgreSQL and TypeScript/Fastify. It provides a control plane for projects, isolated PostgreSQL schemas with native Row-Level Security, application authentication, generated REST/RPC APIs, object storage, WebSocket realtime, isolated server functions, durable background jobs, backups with verified restore, a categorized Management Studio, a CLI, a TypeScript SDK, and a native Android companion app built with the Android Gradle Plugin.
+
+The platform deliberately distinguishes **what is verified** from **what is merely implemented**. Runtime status endpoints, the studio, and this document derive service state from live checks rather than from the existence of a route or class.
 
 ---
 
-## Capabilities Overview
+## Capabilities and verification state
 
-| Subsystem | Implementation Status | Key Capabilities |
-| :--- | :--- | :--- |
-| **Control Plane & Projects** | Operational | Multi-project lifecycle, environments (`development`, `staging`, `production`, custom), RBAC (`owner`, `admin`, `developer`, `viewer`), scoped API keys with rotation, AES-256-GCM encrypted secrets, audit logging. |
-| **Database Infrastructure** | Operational | Supports external PostgreSQL (`postgres://`) and embedded PostgreSQL (`pglite://`), per-project schema isolation (`proj_<slug>`) + dedicated PostgreSQL roles (`role_<slug>`), table/column/index/FK management, versioned project migrations with SHA-256 checksums and rollback, SQL editor with destructive-query safeguards, extension management. |
-| **Row-Level Security (RLS)** | Operational | Native PostgreSQL `ENABLE/FORCE ROW LEVEL SECURITY` and `CREATE POLICY` integrated with `auth.uid()`, `auth.role()`, `auth.email()`, `auth.project_id()`, and `auth.jwt()` SQL session helpers. |
-| **Authentication & Identity** | Operational | Project user registration, `scrypt` password hashing, email verification tokens, password recovery, JWT access tokens + opaque refresh token rotation with reuse detection (`token_family_id`), OAuth provider authorization & callback identity linking, admin user management (ban/unban/delete). |
-| **Data APIs & OpenAPI** | Operational | Auto-generated REST CRUD (`/v1/projects/:ref/rest/:table`), PostgREST-compatible filtering (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`, `is`, `contains`, `or`), ordering, pagination, count, many-to-one & one-to-many foreign-key relationship embedding, stored procedure RPC (`/v1/projects/:ref/rpc/:fn`), live OpenAPI 3.1 spec (`/v1/projects/:ref/openapi.json`). |
-| **Object Storage** | Operational | Public & private buckets, bucket access policies (`path_prefix`, `allow_owner_only`, role checks), MIME validation, file-size limits, storage quotas, SHA-256 checksums, HMAC signed download/upload URLs, multipart resumable uploads, abandoned upload cleanup. |
-| **Realtime Services** | Operational | Authenticated WebSocket server (`/v1/projects/:ref/realtime/ws`), automatic PostgreSQL row-change capture via `SECURITY DEFINER` triggers (`INSERT`, `UPDATE`, `DELETE`), channel broadcast, presence tracking, reconnection event replay via `lastEventId`. |
-| **Server Functions & Jobs** | Operational | Versioned JS functions executed in a sandboxed `node:vm` runtime with CPU timeouts, console log capture, encrypted secret injection, and project-scoped DB bridge; durable PostgreSQL background job queue with retries, exponential backoff, dead-letter state, idempotency keys, and recurring schedules. |
-| **Management Studio, CLI & SDK** | Operational | Responsive browser studio (`/` and `/dashboard`) with dark/light themes, automatic session renewal, safe escaped rendering, complete project workflows, realtime inspection, RBAC, backups, mobile navigation, and keyboard commands; CLI (`npm run cli -- ...`) and fluent TypeScript SDK (`createMaaryClient`). |
-| **Android APK Builder & Mobile** | Operational | Polished mobile connection hub, full in-app Management Studio, back-button navigation, generated per-project configuration, multi-density backend-themed icons, binary AXML/ARSC/DEX packaging, and persistent RSA v1 JAR + v2 whole-APK signing. Build with `npm run build:apk` or `POST /v1/platform/apk/build`; download with `GET /v1/platform/apk/download`. |
-| **Operations & Backups** | Operational | `/health`, `/ready`, `/v1/metrics` (JSON & Prometheus format), logical project/platform backups with SHA-256 integrity verification and transactional restoration. |
+| Area | State | What exists | How it is verified |
+| :--- | :--- | :--- | :--- |
+| **Control plane & projects** | Operational | Multi-project lifecycle, environment labels, RBAC (`owner`/`admin`/`developer`/`viewer`), scoped API keys with rotation, AES-256-GCM encrypted secrets, audit trail. | Automated lifecycle, RBAC and isolation tests. |
+| **PostgreSQL** | Operational | External PostgreSQL 15+ or embedded PGlite (persistent directory or memory). Per-project schemas (`proj_<slug>`), dedicated non-superuser roles, migrations with checksums and rollback, SQL editor with destructive-statement safeguards. | Automated DDL/migration tests plus live `/ready` and per-project status probes. |
+| **Row-Level Security** | Operational | `ENABLE`/`FORCE ROW LEVEL SECURITY`, policies, `auth.uid()`, `auth.role()`, `auth.email()`, `auth.project_id()`, `auth.jwt()`, session-scoped claims, per-project privilege boundary that survives `service_role`. | Automated anon/authenticated/service-role tests, including attempt to read the control plane. |
+| **Authentication** | Operational | Project user signup/login, scrypt hashing, email verification, password recovery, JWT access tokens, opaque refresh rotation with reuse detection, OAuth identity linking, admin user management. Platform operators use a separate session system. | Automated flow tests (including token replay) and browser-level studio test. |
+| **Data API & OpenAPI** | Operational | REST CRUD per table, PostgREST-style filters (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`, `is`, `contains`, `or`), ordering, pagination, counts, FK relationship embedding, RPC, OpenAPI 3.1. | Automated CRUD/filter/RLS tests; live endpoint catalogue in the studio. |
+| **Object storage** | Operational | Local filesystem or S3-compatible adapter, public/private buckets, per-bucket policies, MIME validation, size limits, quotas, SHA-256 checksums, signed download/upload URLs, multipart uploads. | Automated upload/ACL/signing tests. Backend enforcement, not just UI hiding. |
+| **Realtime** | Operational | Authenticated WebSocket endpoint, PostgreSQL trigger capture, broadcast, presence, replay via `lastEventId`. | Automated live WebSocket delivery test; studio inspector connects for real. |
+| **Server functions** | Implemented, environment-specific | Versioned JavaScript handlers in a `node:vm` sandbox with a separate OS subprocess boundary, CPU/time limits, captured console logs, secret injection, project-scoped DB bridge. | Sandbox-escape and invocation tests pass; per-project status reports `implemented_unverified` until an invocation is recorded on that instance. |
+| **Background jobs** | Operational when a worker runs | Durable PostgreSQL queue, retries with backoff, dead-letter state, idempotency keys, recurring schedules. | Automated retry/dead-letter/schedule tests; status reports `requires_configuration` when `WORKER_ENABLED=false`. |
+| **Backups** | Operational | Logical project and platform snapshots, SHA-256 integrity verification, transactional restore, restore timestamps. | Automated create → verify → mutate → restore test; the studio shows whether a restore has ever been exercised. |
+| **Management Studio** | Operational | 16 categorized sections covering every subsystem, with live data, validation, confirmations, empty states and responsive layout. | DOM-level end-to-end test renders every section against a live server. |
+| **CLI & SDK** | Operational | `npm run cli` and `src/sdk/index.ts`. Not published to npm; use from the repository. | Exercised by the automated suite. |
+| **Android companion** | Built in CI; not built on servers without the SDK | Native connection hub (URL policy, `/ready` probe, persistence, TLS enforcement) that then hosts the studio; genuine Gradle/AGP build. | Gradle unit tests + `assembleDebug` + `apksigner`/`aapt2` verification in CI. The server reports `not_built` when no artifact is present and **never fabricates an APK**. |
+
+Every state above is also exposed at `GET /v1/platform/status` (operator-authenticated) and `GET /v1/projects/:ref/status`, with a human-readable summary, the evidence used, and the next action when configuration is incomplete.
 
 ---
 
 ## Requirements
 
-- **Node.js**: 22+
-- **Database**:
-  - External PostgreSQL 15+ (`DATABASE_URL=postgres://...` via Docker Compose or self-hosted PostgreSQL), **or**
-  - Embedded persistent PostgreSQL (`DATABASE_URL=pglite://./data/postgres`) for zero-dependency local operation, **or**
-  - Embedded in-memory PostgreSQL (`DATABASE_URL=pglite://memory`) for fast isolated integration testing.
+- **Node.js 22+**
+- **Database** — one of:
+  - External PostgreSQL 15+ (`DATABASE_URL=postgres://…`, recommended for production),
+  - Embedded persistent PostgreSQL (`DATABASE_URL=pglite://./data/postgres`),
+  - Embedded in-memory PostgreSQL (`DATABASE_URL=pglite://memory`, for tests only — data is lost on exit).
+- **Android build only** — JDK 17+ and the Android SDK (platform 34, build-tools). The server itself does not require Java.
 
 ---
 
-## Quick Start
+## Quick start
 
-### 1. Local Self-Contained Operation (No Docker Required)
+### 1. Local, no Docker
 
 ```bash
 npm install
@@ -47,120 +54,79 @@ npm run db:migrate
 npm run dev
 ```
 
-Open `http://localhost:4100` in your browser to access the **MAARY BASE Management Studio**.
+Open `http://localhost:4100`. Register the first operator in the browser.
 
-### 2. Docker Compose Deployment (External PostgreSQL 17)
+### 2. Docker Compose with external PostgreSQL 17
 
 ```bash
 cp .env.example .env
-# Set NODE_ENV=production and unique POSTGRES_PASSWORD, JWT_SECRET, ENCRYPTION_KEY,
-# and PLATFORM_BOOTSTRAP_TOKEN values in .env (see docs/OPERATIONS.md).
+# Set NODE_ENV=production and unique JWT_SECRET, ENCRYPTION_KEY, PLATFORM_BOOTSTRAP_TOKEN,
+# POSTGRES_PASSWORD (see docs/OPERATIONS.md).
 docker compose up -d --build
 ```
+
+The API container mounts `/app/data` (backups) and `/app/storage` (objects). Include a Gradle-built APK at `/app/releases/marry-base.apk` (image build or volume mount) if you want in-app downloads; otherwise the API reports `not_built`.
 
 ---
 
 ## Management Studio
 
-The dependency-free Management Studio is served directly by Fastify and requires no frontend build step. It includes:
+The dependency-free studio is served by Fastify at `/` and `/dashboard`; no frontend build step is required. Navigation is hash-based and bookmarkable.
 
-- Project diagnostics, environments, launch checklist, SDK snippets, and recent activity.
-- Schema/table management, a row browser, SQL editor with local query history, and native RLS policy controls.
-- Versioned migrations and confirmed rollbacks.
-- End-user administration and authentication policy settings.
-- Bucket/object management, real file or text uploads, and expiring signed downloads.
-- Function deployment and invocation, durable job queues, and recurring schedules.
-- Live WebSocket inspection, broadcasts, channels, and persisted event history.
-- Scoped API keys with one-time credential display, encrypted secrets, and team RBAC.
-- Backup creation/verification/restoration, audit search, OpenAPI export, project settings, and signed Android builds.
+| Group | Section | What you can do |
+| :--- | :--- | :--- |
+| Workspace | **Overview** | Live per-service status, real usage counts, environments, endpoint URL, recent audit activity, next actions. |
+| Database | **Tables & rows** | Visual schema panel (columns, types, indexes, relationships, policies), create/alter/drop tables, filter-sort-paginate rows, insert/edit/delete rows, toggle RLS. |
+| Database | **SQL editor** | Run scoped SQL with role impersonation, destructive-query safeguards and local history. |
+| Database | **Migrations** | Apply checksummed migrations, review history, roll back with confirmation. |
+| Database | **Roles & RLS** | Project roles and grants, current connection details (never passwords), tables missing RLS, policy editor. |
+| Build | **Authentication** | Project users, roles, verification, suspension, policy (signup, verification, TTLs), OAuth/OIDC provider configuration with a real authorize-URL check, token configuration reference. |
+| Build | **API** | Generated endpoint catalogue with copyable examples, OpenAPI export, live API tester with a real key, scoped key management. |
+| Build | **Storage** | Buckets with usage and limits, upload (file or text), object browser, signed downloads, visibility and deletion. |
+| Build | **Realtime** | Connection info, live WebSocket inspector, broadcasts, channels, persisted events. |
+| Build | **Functions** | Deploy/version/invoke handlers, captured logs, recent invocation history. |
+| Build | **Jobs & schedules** | Enqueue jobs, filter the queue, process due work, cancel, create and remove recurring schedules. |
+| Observe | **Logs & diagnostics** | Unified stream across audit, functions, jobs, realtime, storage and backups with source/level filters and service context. |
+| Observe | **Backups & recovery** | Create, verify and restore snapshots; migration status; recovery checklist. |
+| Configure | **Project settings** | General settings, environments, encrypted secrets, team RBAC, danger zone. |
+| Configure | **Platform administration** | Platform service checks, deployment diagnostics, operator accounts, Gradle APK status/build, platform backups, global audit. |
+| Configure | **SDK, CLI & docs** | Real base URL, SDK snippet, cURL example, CLI commands, client route reference, integration checklist. |
 
-Use **Ctrl/Cmd + K** to open the command menu and **Ctrl/Cmd + Enter** in the SQL editor to run a query. Navigation is hash-based, so workspace views can be bookmarked and restored.
+Keyboard: `Ctrl/Cmd + K` opens the command menu, `Ctrl/Cmd + Enter` runs the SQL editor.
 
-Studio source is organized under `public/dashboard/`:
-
-```text
-public/dashboard/
-├── index.html       # Accessible application shell, dialogs, and SVG icon system
-├── styles.css       # Responsive dark/light design system
-├── app.js           # Authentication, routing, shell events, and command menu
-└── js/
-    ├── core.js      # API client, token renewal, state, safe rendering, and UI utilities
-    ├── pages.js     # Workspace templates, data loaders, and table renderers
-    └── actions.js   # Forms, mutations, confirmations, uploads, and realtime actions
-```
+Studio source: `public/dashboard/{index.html,styles.css,app.js,js/{core,pages,actions}.js}`.
 
 ---
 
-## Android Mobile Client
+## API, CLI and SDK
 
-The downloadable app opens a local connection hub rather than a static information page. It can:
+- **REST/RPC base:** `http://<host>:4100/v1/projects/<projectRef>`
+  - `/rest/:table`, `/rpc/:fn`, `/openapi.json`
+- **Auth:** `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/user`, `/auth/recover`, `/auth/reset-password`, `/auth/verify`, `/auth/oauth/:provider`
+- **Storage:** `/storage/buckets`, `/storage/buckets/:bucket/objects/:path`, `/storage/buckets/:bucket/sign/:path`
+- **Functions:** `/functions/:slug/invoke`
+- **Realtime:** `ws(s)://<host>/v1/projects/<projectRef>/realtime/ws?apikey=…`
+- **Operations (new):** `/v1/platform/status`, `/v1/platform/version`, `/v1/projects/:ref/status`, `/v1/projects/:ref/logs`, `/v1/projects/:ref/database/roles`, `/v1/projects/:ref/database/connection`, `/v1/projects/:ref/api/endpoints`, `/v1/platform/apk/status`
 
-- Verify a server through `/ready`, show basic runtime status, and remember the last working URL on the device.
-- Open the complete Management Studio inside the app, with WebView history handled by the Android back button.
-- Provide direct health/platform links plus emulator, LAN, HTTPS, and connection troubleshooting guidance.
-- Use a project-specific package, version, server URL, and generated `assets/www/config.js` without interpolating server data into HTML.
+See [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) for the full reference.
 
-Use `http://10.0.2.2:4100` from the Android emulator when MARRY BASE runs on the host computer. Use the host's LAN address for a physical test device, and HTTPS for production. The server URL contains no credentials; operator authentication remains inside the Studio.
-
-```bash
-# Build the default signed APK at releases/marry-base.apk
-npm run build:apk
-
-# Or build a project-specific artifact through the Studio's APK workspace.
-# Its download URL is /v1/platform/apk/download?projectSlug=<slug>.
-```
-
-Project downloads serve the exact artifact produced by the build. They do not rebuild with default settings, and project builds never replace the default `releases/marry-base.apk`. Mobile source lives in `public/mobile/`; the native source shell under `android/` and the generated DEX in `src/services/apk.service.ts` use the same local client and connection behavior.
-
-### Android signing and upgrade identity
-
-Every APK is signed with both APK Signature Scheme v2 (required by modern Android installers) and a v1/JAR signature. The first local build creates an RSA 2048-bit private key at `data/apk-signing/private-key.pem` with owner-only permissions and reuses it for subsequent builds. **Back up this key securely and never commit it**: losing or replacing it prevents Android from accepting later builds as updates to the same package.
-
-For managed/CI signing, set the `APK_SIGNING_PRIVATE_KEY` secret to a PKCS#8 PEM key, or set `APK_SIGNING_KEY_FILE` to a persistent key path. The optional CI secret is read only during the APK build step. Test builds use an isolated key under `data/test-apk-signing/`.
-
-Verify a built artifact with Android's own tooling:
+### CLI
 
 ```bash
-# Uses apksigner from ANDROID_HOME/ANDROID_SDK_ROOT, apksigner from PATH,
-# or an explicit APKSIGNER executable path.
-npm run verify:apk
-
-# A local apksigner JAR is also supported.
-JAVA=/path/to/java APKSIGNER_JAR=/path/to/apksigner.jar npm run verify:apk
-```
-
-The verification command requires v2 at the application's real SDK range and separately checks the retained v1 signature. CI runs this gate after every APK build.
-
----
-
-## Developer Workflows
-
-### CLI Usage
-
-```bash
-# Check platform health, database mode, and migration status
 npm run cli -- status
-
-# Apply platform migrations
-npm run cli -- db migrate
-
-# Create an isolated project (outputs anon and service_role keys)
 npm run cli -- projects create "Acme App" acme-app
-
-# Inspect project diagnostics and schema tables
 npm run cli -- projects inspect acme-app
-
-# Execute SQL inside the project's isolated schema
-npm run cli -- sql acme-app "CREATE TABLE todos (id serial PRIMARY KEY, title text NOT NULL);"
-
-# Create, verify, and restore a logical backup
+npm run cli -- sql acme-app "SELECT current_schema();"
+npm run cli -- functions deploy acme-app hello ./hello.js
+npm run cli -- functions invoke acme-app hello '{"name":"Ada"}'
 npm run cli -- backup create acme-app
-npm run cli -- backup list acme-app
 npm run cli -- backup verify <backupId>
 npm run cli -- backup restore <backupId>
+npm run cli -- apk status
+npm run cli -- apk build 1.1.0 2      # requires JDK 17 + Android SDK
 ```
 
-### TypeScript Client SDK (`src/sdk/index.ts`)
+### SDK
 
 ```ts
 import { createMaaryClient } from "./src/sdk/index.js";
@@ -169,65 +135,80 @@ const maary = createMaaryClient("http://localhost:4100", "<PROJECT_ANON_KEY>", {
   projectRef: "acme-app",
 });
 
-// 1. Authenticate an application user
-await maary.auth.signUp({
-  email: "developer@acme.io",
-  password: "StrongPassword123!",
-});
-
-// 2. Query & mutate database tables (enforcing PostgreSQL Row-Level Security)
-const { data: created } = await maary
+const { data, error } = await maary
   .from("todos")
-  .insert({ title: "Launch on MAARY BASE" });
-
-const { data: todos } = await maary
-  .from("todos")
-  .select("id,title")
-  .eq("title", "Launch on MAARY BASE")
-  .limit(10);
-
-// 3. Upload and create signed URLs in Object Storage
-await maary.storage.from("avatars").upload("users/profile.txt", "Hello World", {
-  mimeType: "text/plain",
-});
-
-// 4. Invoke an isolated Server Function
-const fnRes = await maary.functions.invoke("hello-world", {
-  body: { event: "signup" },
-});
-
-// 5. Subscribe to live PostgreSQL row changes over WebSocket
-const channel = await maary.realtime
-  .channel("db:todos")
-  .on("postgres_changes", (event) => {
-    console.log("Row change:", event.operation, event.record);
-  })
-  .subscribe();
+  .select("*")
+  .order("created_at", { ascending: false });
 ```
+
+The SDK is repository source, not an npm package. It is exercised by the automated test suite.
 
 ---
 
-## Verification & Testing
+## Android companion app
+
+The native app owns the device-side connection workflow; the Management Studio is served by the connected instance.
+
+**Native responsibilities**
+
+- Validate the server address (HTTPS anywhere; plain HTTP only for loopback, emulator loopback and RFC1918/link-local hosts; no embedded credentials, query strings or fragments).
+- Probe `/ready` and show the server's own dependency report (database, migrations, storage, worker).
+- Persist the last verified server, reopen it on launch, and expose “Change server”, “Reload” and “Open in browser”.
+- Reject invalid TLS certificates (no “proceed anyway”), block mixed content, and keep file/universal file access disabled.
+- Show a native error dialog with retry when the studio cannot load.
+
+**Studio responsibilities** — projects, schema, SQL, auth, storage, functions, jobs, realtime, logs, backups and settings.
+
+### Building the APK — genuine Gradle pipeline only
 
 ```bash
-# Run TypeScript typechecking
-npm run typecheck
-
-# Validate Management Studio and mobile browser modules
-npm run check:studio
-npm run check:mobile
-
-# Compile production build to dist/
-npm run build
-
-# Run the full integration test suite
-npm test
+# Workstation / CI with JDK 17 and ANDROID_HOME pointing at an SDK with platform 34
+cd android
+./gradlew :app:testDebugUnitTest
+./gradlew :app:assembleDebug -PmarryVersionName=1.1.0 -PmarryVersionCode=2
 ```
+
+Or, from the repository root: `npm run android:build`. This invokes Gradle and copies
+`android/app/build/outputs/apk/debug/app-debug.apk` to `releases/marry-base.apk` with a
+metadata sidecar.
+
+The server does **not** generate Android bytecode, AXML, ARSC, DEX or signatures, and there is no
+ZIP-fabrication fallback. Without a JDK and SDK it returns HTTP 409 `apk_build_unavailable`
+listing the missing prerequisites. `GET /v1/platform/apk/download` returns 404 with an actionable
+message until a verified artifact exists. CI builds the APK, verifies it with `apksigner`, `aapt2`
+and `zipalign`, uploads it as a workflow artifact, and only then runs the integration suite.
+
+Signing: CI uses the generated debug keystore so the artifact is installable and verifiable. For
+store distribution, configure a release keystore (see [`docs/ANDROID.md`](docs/ANDROID.md)); the
+signing identity must stay stable across updates.
+
+---
+
+## Verification
+
+```bash
+npm run typecheck     # TypeScript
+npm run check:studio  # dashboard modules parse
+npm run check:mobile  # mobile browser hub parses
+npm run build         # production bundle (tsc → dist/)
+npm test              # 21 integration/DOM tests
+```
+
+Test suites cover: health/readiness, operator auth and session rotation, project lifecycle and
+RBAC isolation, data API CRUD/filters/RLS, storage ACLs and signed URLs, functions sandbox,
+jobs/retries, backup restore, realtime WebSocket delivery, CLI/SDK, Android artifact honesty, the
+new operational endpoints, and full studio rendering/navigation against a live server.
+
+See [`docs/VERIFICATION.md`](docs/VERIFICATION.md) for what was actually executed in this
+environment and what remains environment-dependent (notably the Android Gradle build).
 
 ---
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — System architecture, security boundaries, project isolation, and subsystem design.
-- [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) — Complete HTTP & WebSocket API reference.
-- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — Deployment, backups, recovery, metrics, hardware requirements, and troubleshooting.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — boundaries, isolation model, subsystems, studio architecture.
+- [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) — HTTP & WebSocket endpoints.
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — installation, configuration, backups, upgrades, troubleshooting.
+- [`docs/ANDROID.md`](docs/ANDROID.md) — Android architecture, build, signing, verification.
+- [`docs/VERIFICATION.md`](docs/VERIFICATION.md) — executed test evidence, manual probes, unverified items.
+- [`docs/IMPLEMENTATION_REPORT.md`](docs/IMPLEMENTATION_REPORT.md) — final report: what was completed, verified, and what remains unverified.

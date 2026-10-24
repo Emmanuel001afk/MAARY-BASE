@@ -5,23 +5,6 @@ import test from "node:test";
 import { inflateRawSync } from "node:zlib";
 import { buildApp } from "./app.js";
 
-function unpackApk(apk: Buffer): Map<string, Buffer> {
-  const entries = new Map<string, Buffer>();
-  let position = 0;
-  while (position + 30 <= apk.length && apk.readUInt32LE(position) === 0x04034b50) {
-    const method = apk.readUInt16LE(position + 8);
-    const compressedSize = apk.readUInt32LE(position + 18);
-    const nameLength = apk.readUInt16LE(position + 26);
-    const extraLength = apk.readUInt16LE(position + 28);
-    const name = apk.subarray(position + 30, position + 30 + nameLength).toString("utf8");
-    const dataOffset = position + 30 + nameLength + extraLength;
-    const compressed = apk.subarray(dataOffset, dataOffset + compressedSize);
-    entries.set(name, method === 0 ? compressed : inflateRawSync(compressed));
-    position = dataOffset + compressedSize;
-  }
-  return entries;
-}
-
 test("health and readiness endpoints return operational status and MARRY BASE platform identity", async () => {
   const app = await buildApp();
   try {
@@ -43,15 +26,34 @@ test("health and readiness endpoints return operational status and MARRY BASE pl
     assert.equal(platformRes.statusCode, 200);
     const platformBody = platformRes.json();
     assert.equal(platformBody.name, "MARRY BASE");
-    assert.equal(platformBody.status, "operational");
+    // The public summary is derived from live checks. In the test process the
+    // background worker is disabled by default, so the honest overall state is
+    // "degraded" even though the API itself is reachable.
+    assert.ok(["operational", "degraded"].includes(platformBody.status));
+    assert.equal(platformBody.status, platformBody.services.backgroundJobs === "operational" ? "operational" : "degraded");
+    // Every advertised state must come from the shared status vocabulary and
+    // must agree with the live database check that was just asserted above.
+    const vocabulary = new Set([
+      "operational",
+      "implemented_unverified",
+      "partially_implemented",
+      "requires_configuration",
+      "unavailable",
+      "failed",
+      "missing",
+    ]);
+    for (const [service, state] of Object.entries(platformBody.services)) {
+      assert.ok(vocabulary.has(state as string), `${service} reported unknown state ${state}`);
+      if (platformBody.database.status === "operational") {
+        assert.notEqual(state, "unavailable", `${service} must not be unavailable while the database is up`);
+      }
+    }
+    assert.equal(platformBody.database.status, "operational");
     assert.equal(platformBody.database.engine, "PostgreSQL");
     assert.equal(platformBody.branding.logoPngUrl, "/v1/platform/logo");
     assert.equal(platformBody.branding.logoSvgUrl, "/v1/platform/logo.svg");
-    assert.equal(
-      platformBody.branding.apkDownloadUrl,
-      "/v1/platform/apk/download"
-    );
-    assert.equal(platformBody.modules.mobileApkBuilder, "operational");
+    assert.ok(["available", "missing", "invalid"].includes(platformBody.services.androidCompanion));
+    assert.ok(["not_built", "available", "invalid_artifact", "build_available"].includes(platformBody.android.statusLabel));
 
     const metricsJsonRes = await app.inject({
       method: "GET",
@@ -141,170 +143,72 @@ test("dashboard routes serve MARRY BASE management interface, logo, and assets",
   }
 });
 
-test("APK builder initiates, builds, signs, and serves the MARRY BASE Android APK", async () => {
+test("Android artifact endpoints report real build status and never fabricate a package", async () => {
   const app = await buildApp();
   try {
-    const anonymousBuild = await app.inject({
-      method: "POST",
-      url: "/v1/platform/apk/build",
-      payload: { versionName: "1.0.0", versionCode: 1 },
-    });
-    assert.equal(anonymousBuild.statusCode, 401);
+    const anonymousStatus = await app.inject({ method: "GET", url: "/v1/platform/apk/status" });
+    assert.equal(anonymousStatus.statusCode, 401);
 
     const registration = await app.inject({
       method: "POST",
       url: "/v1/platform/auth/register",
       payload: {
-        email: `apk-builder-${Date.now()}@maary.dev`,
+        email: `apk-status-${Date.now()}@maary.dev`,
         password: "StrongPassword123!",
       },
     });
     assert.equal(registration.statusCode, 201, registration.body);
     const accessToken = registration.json().accessToken as string;
-    const buildRes = await app.inject({
-      method: "POST",
-      url: "/v1/platform/apk/build",
-      headers: { authorization: `Bearer ${accessToken}` },
-      payload: {
-        versionName: "1.0.0",
-        versionCode: 1,
-      },
-    });
-    assert.equal(buildRes.statusCode, 201);
-    const buildBody = buildRes.json();
-    assert.equal(buildBody.apk.platformName, "MARRY BASE");
-    assert.equal(buildBody.apk.packageName, "com.marrybase.platform");
-    assert.equal(buildBody.apk.fileName, "marry-base.apk");
-    assert.ok(buildBody.apk.sizeBytes > 10000);
-    assert.ok(buildBody.apk.entries.includes("AndroidManifest.xml"));
-    assert.ok(buildBody.apk.entries.includes("classes.dex"));
-    assert.ok(buildBody.apk.entries.includes("res/drawable/logo.png"));
-    assert.ok(buildBody.apk.entries.includes("assets/www/index.html"));
-    assert.ok(buildBody.apk.entries.includes("assets/www/styles.css"));
-    assert.ok(buildBody.apk.entries.includes("assets/www/app.js"));
-    assert.ok(buildBody.apk.entries.includes("assets/www/config.js"));
-    assert.ok(buildBody.apk.entries.includes("assets/www/app-icon.png"));
-    assert.ok(buildBody.apk.entries.includes("META-INF/MARRYBAS.RSA"));
+    const headers = { authorization: `Bearer ${accessToken}` };
 
-    const dlRes = await app.inject({
-      method: "GET",
-      url: "/v1/platform/apk/download",
-    });
-    assert.equal(dlRes.statusCode, 200);
-    assert.match(
-      dlRes.headers["content-type"] ?? "",
-      /application\/vnd\.android\.package-archive/
-    );
-    // ZIP/APK local file header magic bytes PK\x03\x04
-    assert.equal(dlRes.rawPayload[0], 0x50);
-    assert.equal(dlRes.rawPayload[1], 0x4b);
-    assert.equal(dlRes.rawPayload[2], 0x03);
-    assert.equal(dlRes.rawPayload[3], 0x04);
-  } finally {
-    await app.close();
-  }
-});
+    const statusRes = await app.inject({ method: "GET", url: "/v1/platform/apk/status", headers });
+    assert.equal(statusRes.statusCode, 200);
+    const status = statusRes.json();
+    assert.equal(status.platformName, "MARRY BASE");
+    assert.equal(status.packageName, "com.marrybase.platform");
+    assert.ok(["available", "missing", "invalid"].includes(status.state));
+    assert.ok(typeof status.summary === "string" && status.summary.length > 20);
+    assert.equal(typeof status.buildEnvironment.gradleBuildPossible, "boolean");
+    assert.ok(Array.isArray(status.buildEnvironment.missingPrerequisites));
 
-test("project APK downloads preserve the exact built artifact, configuration, and default release", async () => {
-  const app = await buildApp();
-  const slug = "artifact-check";
-  const artifactPath = resolve(process.cwd(), "releases", `marry-base-${slug}.apk`);
-  try {
-    const registration = await app.inject({
-      method: "POST",
-      url: "/v1/platform/auth/register",
-      payload: {
-        email: `apk-artifact-${Date.now()}@maary.dev`,
-        password: "StrongPassword123!",
-      },
-    });
-    const accessToken = registration.json().accessToken as string;
-    const authorization = { authorization: `Bearer ${accessToken}` };
-    const defaultBefore = await app.inject({ method: "GET", url: "/v1/platform/apk/download" });
-    assert.equal(defaultBefore.statusCode, 200);
-
-    const missing = await app.inject({
-      method: "GET",
-      url: "/v1/platform/apk/download?projectSlug=not-built-yet",
-    });
-    assert.equal(missing.statusCode, 404);
-
-    const build = await app.inject({
-      method: "POST",
-      url: "/v1/platform/apk/build",
-      headers: authorization,
-      payload: {
-        projectSlug: slug,
-        serverUrl: "https://backend.example.com/base/dashboard/",
-        versionName: "2.4.1",
-        versionCode: 42,
-      },
-    });
-    assert.equal(build.statusCode, 201, build.body);
-    assert.equal(build.json().apk.packageName, "com.marrybase.app.artifactcheck");
-    assert.equal(build.json().apk.downloadUrl, `/v1/platform/apk/download?projectSlug=${slug}`);
-
-    const downloadUrl = build.json().apk.downloadUrl as string;
-    const first = await app.inject({ method: "GET", url: downloadUrl });
-    const second = await app.inject({ method: "GET", url: downloadUrl });
-    assert.equal(first.statusCode, 200);
-    assert.equal(second.statusCode, 200);
-    assert.equal(first.headers["x-apk-sha256"], build.json().apk.checksumSha256);
-    assert.equal(second.headers["x-apk-sha256"], first.headers["x-apk-sha256"]);
-    assert.ok(first.rawPayload.equals(second.rawPayload), "A download must not rebuild or re-sign the artifact");
-
-    const entries = unpackApk(first.rawPayload);
-    const generatedConfig = entries.get("assets/www/config.js")!.toString("utf8");
-    const buildConfig = JSON.parse(entries.get("assets/marry-base-config.json")!.toString("utf8"));
-    assert.match(generatedConfig, /https:\/\/backend\.example\.com\/base/);
-    assert.match(generatedConfig, /2\.4\.1/);
-    assert.equal(buildConfig.serverUrl, "https://backend.example.com/base");
-    assert.equal(buildConfig.versionCode, 42);
-    assert.equal(buildConfig.projectSlug, slug);
-    assert.match(entries.get("assets/www/index.html")!.toString("utf8"), /Connect &amp; open Studio|Connect & open Studio/);
-    assert.match(entries.get("assets/www/index.html")!.toString("utf8"), /Content-Security-Policy/);
-    assert.doesNotMatch(entries.get("assets/www/app.js")!.toString("utf8"), /innerHTML/);
-    const dex = entries.get("classes.dex")!;
-    for (const required of [
-      "Lcom/marrybase/app/artifactcheck/MainActivity;",
-      "setJavaScriptEnabled",
-      "setDomStorageEnabled",
-      "setAllowUniversalAccessFromFileURLs",
-      "setWebViewClient",
-      "onBackPressed",
-      "canGoBack",
-    ]) {
-      assert.ok(dex.includes(Buffer.from(required)), `DEX is missing ${required}`);
+    const download = await app.inject({ method: "GET", url: "/v1/platform/apk/download" });
+    if (status.state === "available") {
+      assert.equal(download.statusCode, 200);
+      assert.match(download.headers["content-type"] ?? "", /application\/vnd\.android\.package-archive/);
+      assert.equal(download.rawPayload[0], 0x50);
+      assert.equal(download.rawPayload[1], 0x4b);
+      assert.equal(download.headers["x-apk-sha256"], status.artifact.checksumSha256);
+      assert.ok(status.verification?.hasAndroidManifest);
+      assert.ok(status.verification?.hasClassesDex);
+    } else {
+      assert.equal(download.statusCode, 404);
+      assert.match(download.json().message, /No Android APK|failed verification/);
     }
-    const mobileIcon = await readFile(resolve(process.cwd(), "public", "mobile", "app-icon.png"));
-    assert.ok(entries.get("assets/www/app-icon.png")!.equals(mobileIcon));
 
-    const defaultAfter = await app.inject({ method: "GET", url: "/v1/platform/apk/download" });
-    assert.equal(defaultAfter.statusCode, 200);
-    assert.equal(defaultAfter.headers["x-apk-sha256"], defaultBefore.headers["x-apk-sha256"]);
-    assert.ok(defaultAfter.rawPayload.equals(defaultBefore.rawPayload), "Project builds must not replace the default APK");
-
-    for (const payload of [
-      { projectSlug: "../escape" },
-      { projectSlug: slug, serverUrl: "javascript:alert(1)" },
-      { projectSlug: slug, versionCode: 0 },
-      { projectSlug: slug, versionName: "bad version" },
-    ]) {
-      const invalid = await app.inject({
+    // A build request either runs the genuine Gradle pipeline or fails with an
+    // actionable 409 — it must never return a synthesised artifact. When the
+    // toolchain is available this test only inspects the status (a real build
+    // is covered by CI's Android job) so the suite never rewrites the verified
+    // artifact under test.
+    if (!status.buildEnvironment.gradleBuildPossible) {
+      const buildRes = await app.inject({
         method: "POST",
         url: "/v1/platform/apk/build",
-        headers: authorization,
-        payload,
+        headers,
+        payload: { versionName: "9.9.9", versionCode: 99 },
       });
-      assert.equal(invalid.statusCode, 400, invalid.body);
+      assert.equal(buildRes.statusCode, 409, buildRes.body);
+      const body = buildRes.json();
+      assert.equal(body.error, "apk_build_unavailable");
+      assert.ok(body.details.instructions.includes("android:build") || body.details.instructions.includes("Gradle"));
+      assert.ok(Array.isArray(body.details.missingPrerequisites));
+      const afterStatus = await app.inject({ method: "GET", url: "/v1/platform/apk/status", headers });
+      assert.equal(afterStatus.json().state, status.state);
+    } else {
+      assert.ok(status.buildEnvironment.javaVersion, "a runnable JDK is reported");
+      assert.ok(status.buildEnvironment.androidSdkPath, "the SDK path is reported");
     }
-    const traversal = await app.inject({
-      method: "GET",
-      url: "/v1/platform/apk/download?projectSlug=..%2Fescape",
-    });
-    assert.equal(traversal.statusCode, 400);
   } finally {
-    await rm(artifactPath, { force: true });
     await app.close();
   }
 });
