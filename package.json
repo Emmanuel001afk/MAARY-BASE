@@ -2,7 +2,7 @@
   "name": "mari-base",
   "version": "1.0.0",
   "private": true,
-  "description": "MARRY BASE — Self-hostable PostgreSQL backend development platform with Management Studio and Android companion",
+  "description": "MARI BASE — Self-hostable PostgreSQL backend development platform with Management Studio and Android companion",
   "type": "module",
   "bin": {
     "mari-base": "./dist/cli/index.js"
