@@ -93,8 +93,16 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # "tools" was removed from Android sdkmanager; explicitly install platform-tools.
+          packages: "platform-tools"
 
       - name: Install Android SDK Platform 34 & Build-Tools 34.0.0
         run: |
