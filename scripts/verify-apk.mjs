@@ -83,12 +83,29 @@ if (arsc.readUInt16LE(0) !== 0x0002) {
   throw new Error("resources.arsc is not a compiled Android resource table (0x0002)");
 }
 
-const dex = extractEntry("classes.dex");
-if (dex.subarray(0, 4).toString("ascii") !== "dex\n") {
-  throw new Error("classes.dex does not begin with Dalvik executable magic ('dex\\n')");
+const dexNames = [...entries.keys()].filter((name) =>
+  /^classes\d*\.dex$/.test(name)
+);
+if (!dexNames.includes("classes.dex")) {
+  throw new Error("APK is missing required entry 'classes.dex'");
 }
-if (!dex.includes(Buffer.from("Lcom/marrybase/platform/MainActivity;"))) {
-  throw new Error("classes.dex does not contain compiled MainActivity class");
+
+let foundMainActivity = false;
+for (const dexName of dexNames) {
+  const dex = extractEntry(dexName);
+  if (dex.subarray(0, 4).toString("ascii") !== "dex\n") {
+    throw new Error(
+      `${dexName} does not begin with Dalvik executable magic ('dex\\n')`
+    );
+  }
+  if (dex.includes(Buffer.from("Lcom/marrybase/platform/MainActivity;"))) {
+    foundMainActivity = true;
+  }
+}
+if (!foundMainActivity) {
+  throw new Error(
+    `No DEX entry (${dexNames.join(", ")}) contains compiled MainActivity class`
+  );
 }
 
 function findApksigner() {
