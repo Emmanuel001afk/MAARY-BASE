@@ -4,7 +4,7 @@
   <img src="assets/logo.png" alt="MARI BASE Official Logo" width="180" />
 </p>
 
-**MARI BASE** (aliased as `MARI BASE`) is a self-hostable backend development platform built on PostgreSQL, TypeScript, and Fastify. It combines an operator Management Studio, workspaces/organizations, multi-project PostgreSQL schema and role isolation, native Row-Level Security (RLS), end-user authentication, auto-generated REST and RPC Data APIs, object storage, WebSocket realtime streams, isolated child-worker server functions, durable background jobs, SHA-256 verified backups, a CLI, a TypeScript SDK, and a native **Android companion app** compiled via an authentic Gradle build pipeline.
+**MARI BASE** is a self-hostable backend development platform built on PostgreSQL, TypeScript, and Fastify. It combines an operator Management Studio, workspaces/organizations, multi-project PostgreSQL schema and role isolation, native Row-Level Security (RLS), end-user authentication, auto-generated REST and RPC Data APIs, object storage, WebSocket realtime streams, isolated child-worker server functions, durable background jobs, SHA-256 verified backups, a CLI, a TypeScript SDK, and a native **Android companion app** compiled via an authentic Gradle build pipeline.
 
 ---
 
