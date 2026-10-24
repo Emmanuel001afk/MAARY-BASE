@@ -156,8 +156,8 @@ test("dashboard routes serve MARI BASE management interface, logo, and assets", 
     assert.equal(appIconRes.rawPayload.readUInt32BE(20), 1024);
     const appIconSvgRes = await app.inject({ method: "GET", url: "/v1/platform/app-icon.svg" });
     assert.equal(appIconSvgRes.statusCode, 200);
-    assert.match(appIconSvgRes.body, /Connected Backend Platform/);
-    assert.match(appIconSvgRes.body, /three secure server layers/);
+    assert.match(appIconSvgRes.body, /MARI BASE/);
+    assert.match(appIconSvgRes.body, /layered database foundations/);
   } finally {
     await app.close();
   }
