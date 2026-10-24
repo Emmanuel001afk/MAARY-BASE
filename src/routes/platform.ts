@@ -79,7 +79,7 @@ export async function registerPlatformRoutes(
     return {
       name: "MARI BASE",
       aliases: ["MARI"],
-      version: "1.0.0",
+      version: "1.1.0",
       status: evaluation.overallStatus,
       branding: {
         logoPngUrl: "/v1/platform/logo",
