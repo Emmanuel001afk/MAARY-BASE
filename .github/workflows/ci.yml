@@ -17,10 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: "temurin"
           java-version: "17"
@@ -28,25 +28,69 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Show Android SDK
+      - name: Show Android SDK and toolchain
         run: |
+          set -euo pipefail
           echo "ANDROID_HOME=${ANDROID_HOME:-unset}"
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-unset}"
-          ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}" 2>/dev/null | head
+          echo "JAVA_HOME=${JAVA_HOME:-unset}"
+          java -version
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          ls "$SDK" 2>/dev/null | head || true
+          ls "$SDK/platforms" 2>/dev/null | tail -3 || true
+          ls "$SDK/build-tools" 2>/dev/null | tail -3 || true
 
+      - name: Gradle wrapper version
+        working-directory: android
+        run: |
+          set +e
+          ./gradlew --version --console=plain 2>&1 | tee /tmp/gradle-version.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            tail -n 25 /tmp/gradle-version.log | while IFS= read -r line; do
+              echo "::error::wrapper: ${line}"
+            done
+            exit "$status"
+          fi
+
+      # Gradle failures are surfaced as GitHub annotations so the reason is
+      # readable from the API even when the raw job log is unavailable.
       - name: Unit-test server address validation
         working-directory: android
-        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+        run: |
+          set +e
+          ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace --console=plain 2>&1 | tee /tmp/gradle-unit-tests.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -nE "^(FAILURE:|\* What went wrong:|Caused by:|Execution failed for task|> Task .* FAILED|e: |.*error:)" /tmp/gradle-unit-tests.log \
+              | head -8 | while IFS= read -r line; do echo "::error::unit-tests: ${line}"; done
+            tail -n 40 /tmp/gradle-unit-tests.log
+            exit "$status"
+          fi
 
       - name: Build debug APK
         working-directory: android
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace -PmarryVersionName=1.1.0 -PmarryVersionCode=2
+        run: |
+          set +e
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace --console=plain \
+            -PmarryVersionName=1.1.0 -PmarryVersionCode=2 2>&1 | tee /tmp/gradle-assemble.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -nE "^(FAILURE:|\* What went wrong:|Caused by:|Execution failed for task|> Task .* FAILED|e: |.*error:)" /tmp/gradle-assemble.log \
+              | head -8 | while IFS= read -r line; do echo "::error::assemble: ${line}"; done
+            tail -n 40 /tmp/gradle-assemble.log
+            exit "$status"
+          fi
 
       - name: Verify APK is a genuine, signed Android package
         run: |
           set -euo pipefail
           APK="android/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
+          if [ ! -s "$APK" ]; then
+            echo "::error::No APK was produced at $APK"
+            ls -R android/app/build/outputs 2>/dev/null || true
+            exit 1
+          fi
           SIZE=$(wc -c < "$APK" | tr -d ' ')
           echo "APK size: $SIZE bytes"
           test "$SIZE" -gt 20000
@@ -100,7 +144,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4

@@ -30,15 +30,12 @@ android {
     }
 
     buildTypes {
-        debug {
-            applicationIdSuffix ""
-        }
         release {
             minifyEnabled false
             // Release signing is supplied by the operator (see docs/ANDROID.md).
             // CI falls back to the debug key so the artifact is installable and
             // its signature is verifiable with apksigner.
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.getByName("debug")
         }
     }
 
