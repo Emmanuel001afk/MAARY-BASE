@@ -249,7 +249,7 @@ public class MainActivity extends Activity {
         statusBox.addView(statusTitle);
 
         statusDetail = new TextView(this);
-        statusDetail.setText("Enter your MARI BASE server URL and run /ready verification.");
+        statusDetail.setText("Enter your server URL, then verify readiness before opening Studio.");
         statusDetail.setTextColor(Color.parseColor("#9CA3AF"));
         statusDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         LinearLayout.LayoutParams detailLp = new LinearLayout.LayoutParams(
