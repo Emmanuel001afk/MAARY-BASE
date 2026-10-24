@@ -309,6 +309,43 @@ test("Critical #3: Android APK contains compiled binary AXML manifest, ARSC reso
     assert.equal(manifest.readUInt16LE(resMapOff), 0x0180); // RES_XML_RESOURCE_MAP_TYPE
     assert.equal(manifest.readUInt32LE(resMapOff + 8), 0x01010001); // android:label
 
+    // Android resolves namespaced attributes through the resource map, not merely
+    // their string names. Verify MainActivity's exported bit uses Android's real
+    // android.R.attr.exported ID (0x01010010) and an explicit boolean true value.
+    const stringCount = manifest.readUInt32LE(16);
+    const stringsStart = 8 + manifest.readUInt32LE(28);
+    const strings = Array.from({ length: stringCount }, (_, index) => {
+      const relativeOffset = manifest.readUInt32LE(36 + index * 4);
+      const offset = stringsStart + relativeOffset;
+      const length = manifest.readUInt16LE(offset);
+      return manifest.subarray(offset + 2, offset + 2 + length * 2).toString("utf16le");
+    });
+    let exportedAttribute: { nameIndex: number; type: number; value: number } | null = null;
+    for (let nodeOff = resMapOff + manifest.readUInt32LE(resMapOff + 4); nodeOff < manifest.length;) {
+      const nodeType = manifest.readUInt16LE(nodeOff);
+      const nodeSize = manifest.readUInt32LE(nodeOff + 4);
+      if (nodeType === 0x0102 && strings[manifest.readUInt32LE(nodeOff + 20)] === "activity") {
+        const attributeCount = manifest.readUInt16LE(nodeOff + 28);
+        for (let index = 0; index < attributeCount; index += 1) {
+          const attributeOff = nodeOff + 36 + index * 20;
+          const nameIndex = manifest.readUInt32LE(attributeOff + 4);
+          if (strings[nameIndex] === "exported") {
+            exportedAttribute = {
+              nameIndex,
+              type: manifest.readUInt8(attributeOff + 15),
+              value: manifest.readUInt32LE(attributeOff + 16),
+            };
+          }
+        }
+      }
+      if (nodeSize < 8) throw new Error("Malformed AXML node in verification test");
+      nodeOff += nodeSize;
+    }
+    assert.ok(exportedAttribute, "MainActivity must have an explicit android:exported attribute");
+    assert.equal(exportedAttribute.type, 0x12); // TYPE_INT_BOOLEAN
+    assert.equal(exportedAttribute.value, 0xffffffff);
+    assert.equal(manifest.readUInt32LE(resMapOff + 8 + exportedAttribute.nameIndex * 4), 0x01010010);
+
     // 3. Verify resources.arsc is a compiled resource table (RES_TABLE_TYPE = 0x0002) with package 0x7f
     const arsc = entries.get("resources.arsc")!.data;
     assert.equal(arsc.readUInt16LE(0), 0x0002); // RES_TABLE_TYPE

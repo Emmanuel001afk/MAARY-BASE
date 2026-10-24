@@ -119,7 +119,7 @@ export function buildAndroidBinaryManifest(
     { name: "label", id: 0x01010001 },
     { name: "icon", id: 0x01010002 },
     { name: "name", id: 0x01010003 },
-    { name: "exported", id: 0x0101001e },
+    { name: "exported", id: 0x01010010 },
     { name: "minSdkVersion", id: 0x0101020c },
     { name: "versionCode", id: 0x0101021b },
     { name: "versionName", id: 0x0101021c },
