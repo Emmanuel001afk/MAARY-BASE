@@ -1,10 +1,11 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm install
+RUN npm ci
 COPY tsconfig.json ./
 COPY assets ./assets
 COPY public ./public
+COPY android ./android
 COPY src ./src
 RUN npm run build
 
@@ -13,11 +14,11 @@ ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=4100
 WORKDIR /app
-COPY --from=build /app/package.json ./
-RUN npm install --omit=dev
+COPY --from=build /app/package.json /app/package-lock.json* ./
+RUN npm ci --omit=dev
 COPY --from=build /app/assets ./assets
 COPY --from=build /app/public ./public
-COPY --from=build /app/releases ./releases
+COPY --from=build /app/android ./android
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/src/db/migrations ./dist/db/migrations
 COPY --from=build /app/src/db/migrations ./src/db/migrations

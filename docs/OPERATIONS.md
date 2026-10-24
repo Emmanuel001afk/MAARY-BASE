@@ -1,79 +1,57 @@
-# MAARY BASE Operations & Deployment Guide
+# MARRY BASE Operations & Self-Hosting Guide
 
-## 1. Hardware & Runtime Requirements
+## 1. Runtime & Database Recommendations
 
-| Environment | CPU | RAM | Disk Storage | Notes |
-| :--- | :--- | :--- | :--- | :--- |
-| **Local Development / Testing** | 1+ vCPU | 512 MB+ | 1 GB+ | Uses embedded PostgreSQL (`pglite://`) or local Docker PostgreSQL. |
-| **Production Single-Node** | 2+ vCPU | 2 GB+ | 20 GB+ SSD | External PostgreSQL 17 recommended with dedicated persistent volumes for `/var/lib/postgresql/data`, `/app/storage`, and `/app/data/backups`. |
+| Deployment Tier | CPU / RAM | Database Engine | Storage |
+| :--- | :--- | :--- | :--- |
+| **Local Dev / CI** | 1+ vCPU, 512 MB+ RAM | `pglite://./data/postgres` or `pglite://memory` | Local filesystem |
+| **Production Self-Hosted** | 2+ vCPU, 2 GB+ RAM | External PostgreSQL 16+ (`postgres://...`) | Persistent SSD volumes (`/var/lib/postgresql/data`, `/app/storage`, `/app/data/backups`) |
 
----
-
-## 2. Environment Configuration
-
-Required and optional environment variables (validated at startup in `src/config.ts`):
-
-- `NODE_ENV`: `development` | `test` | `production`
-- `HOST`: Bind address (`0.0.0.0` for container/preview environments)
-- `PORT`: HTTP/WebSocket port (`4100` default)
-- `DATABASE_URL`:
-  - External PostgreSQL: `postgres://user:pass@host:5432/maary`
-  - Embedded persistent PostgreSQL: `pglite://./data/postgres`
-  - Embedded in-memory PostgreSQL: `pglite://memory`
-- `JWT_SECRET`: Unique secret for signing HS256 JWTs and storage tokens (minimum 32 characters; production startup rejects the built-in development default).
-- `ENCRYPTION_KEY`: Unique master key for AES-256-GCM encryption of project secrets and stored API keys (production startup rejects the built-in development default).
-- `PLATFORM_BOOTSTRAP_TOKEN`: Unique one-time setup credential required in production to create the initial platform superadmin. Send it as `x-platform-bootstrap-token` on the first platform registration only; it is not needed for later ordinary platform accounts.
-- `TRUST_PROXY`: Defaults to `false`. Set `true` only when the API is reachable exclusively through a trusted reverse proxy that overwrites forwarded headers.
-- `STORAGE_DIR`: Local object storage directory (`./storage` default).
-- `BACKUP_DIR`: Directory for logical backup snapshots (`./data/backups` default).
-- `APK_SIGNING_KEY_FILE`: Persistent RSA private key used for Android v1/v2 signing (`./data/apk-signing/private-key.pem` default). `APK_SIGNING_PRIVATE_KEY` can instead supply a PKCS#8 PEM through a secret manager. Keep this identity unchanged for every update to a given installed package.
-- `STATEMENT_TIMEOUT_MS`: Per-query PostgreSQL statement timeout (`15000` ms default).
-- `MAX_QUERY_ROWS`: Maximum rows returned per query (`1000` default).
-- `FUNCTION_TIMEOUT_MS`: Hard execution timeout cap for server functions (`5000` ms default).
-
-Generate fresh values for production secrets (for example, `openssl rand -hex 32`) and keep them outside source control. Set `NODE_ENV=production` before exposing the service. In development/test mode the first registered account can bootstrap the local platform; production requires the bootstrap header above. Public platform registration must still be rate-limited and should be closed or constrained by an operator policy where open account creation is not desired.
+> **Why external PostgreSQL for production?** Embedded PGlite runs in-process for convenient single-developer onboarding and tests, whereas external PostgreSQL 16+ provides true multi-client connection pooling, native OS role enforcement, concurrent worker throughput, and continuous WAL archiving.
 
 ---
 
-## 3. Health, Readiness & Observability
+## 2. Production Environment Variables
 
-- **Liveness (`GET /health`)**: Returns `200 OK` if the Node.js HTTP server is responsive.
-- **Readiness (`GET /ready`)**: Executes `SELECT 1` against PostgreSQL, checks that platform migrations are current, and verifies write permissions on `STORAGE_DIR`. Returns `503 Service Unavailable` if PostgreSQL, migrations, or storage are not ready.
-- **Metrics (`GET /v1/metrics` or `GET /v1/metrics?format=prometheus`)**: Exposes process uptime, RSS/heap memory, database query counters, active project counts, storage bytes/objects, realtime WebSocket connection counts, and job queue counts by status.
+Configure `.env` before running `docker compose up -d --build`:
+
+- `NODE_ENV=production` — Enforces non-default cryptographic secrets and bootstrap token protection.
+- `DATABASE_URL=postgres://user:password@database:5432/maary`
+- `JWT_SECRET` — Minimum 32 random characters (`openssl rand -hex 32`).
+- `ENCRYPTION_KEY` — Minimum 32 random characters for AES-256-GCM encryption of project secrets and API keys.
+- `PLATFORM_BOOTSTRAP_TOKEN` — Minimum 32 random characters required once to register the initial Superadmin account in production.
+- `TRUST_PROXY=true` — Enable only when deployed behind a trusted reverse proxy (Caddy, Nginx, Traefik, Cloudflare) terminating TLS.
+- `WEBHOOK_ALLOW_PRIVATE_NETWORKS=false` — Blocks background webhook jobs from targeting loopback/RFC1918 internal addresses (SSRF protection).
+- `ANDROID_APK_PATH` — Optional path to a compiled & `apksigner`-verified APK artifact to serve from `GET /v1/platform/apk/download`.
 
 ---
 
-## 4. Backup, Verification & Recovery Procedures
+## 3. Initial Admin Bootstrap
 
-### Creating a Backup
+1. Start the stack (`docker compose up -d --build`) and verify readiness (`curl -f http://127.0.0.1:4100/ready`).
+2. Open the Management Studio (`/`) and select **Create account**, or call `POST /v1/platform/auth/register` with header `x-platform-bootstrap-token: <PLATFORM_BOOTSTRAP_TOKEN>`.
+3. The first account atomically acquires a table lock and receives `is_superadmin = true` plus a default Organization workspace. Subsequent accounts do not receive superadmin privileges unless promoted by an existing Superadmin in **Platform Admin**.
+
+---
+
+## 4. Backups, Integrity Verification & Disaster Recovery
+
 ```bash
-# Backup a specific project
+# Create a project-scoped snapshot or full-platform snapshot
 npm run cli -- backup create <projectSlug>
-
-# Or backup all projects on the platform
 npm run cli -- backup create
-```
 
-### Verifying Backup Integrity
-Every backup file written to `BACKUP_DIR` has its SHA-256 hash stored in `platform_backups.checksum_sha256`. Before restoring, verify the file on disk has not been corrupted or modified:
-```bash
+# Verify SHA-256 digest against on-disk archive before restoring
 npm run cli -- backup verify <backupId>
-```
 
-### Restoring a Backup
-Restoration verifies the SHA-256 checksum first, then transactionally recreates missing tables, restores rows, re-applies RLS policies, and re-attaches realtime triggers:
-```bash
+# Restore verified archive inside a transaction
 npm run cli -- backup restore <backupId>
 ```
 
-### Android signing-key recovery
-Back up `APK_SIGNING_KEY_FILE` separately in an encrypted secret store. Logical database backups do not include this private key. Android will reject an update signed by a replacement key, so losing it can require users to uninstall and reinstall the app. Never place the key in Git or in a downloadable release artifact. After every release build, run `npm run verify:apk` with Android `apksigner` installed.
-
 ---
 
-## 5. Upgrades & Migrations
+## 5. Android Companion Build & CI Pipeline
 
-1. Create a full backup before upgrading (`npm run cli -- backup create`).
-2. Pull the new release and install dependencies (`npm ci`).
-3. Apply platform migrations (`npm run db:migrate`). Platform migrations in `src/db/migrations/` are tracked in `platform_migrations` and executed inside a single transaction.
-4. Project-specific schema migrations are tracked independently in `platform_project_migrations` and support transactional rollback via `down_sql` (`POST /v1/projects/:ref/database/migrations/:version/rollback`).
+- Source lives in `android/` (`compileSdk 34`, `minSdk 24`, Java 17, AGP 8.5.2).
+- GitHub Actions (`.github/workflows/ci.yml`) compiles `gradle --project-dir android assembleDebug lintDebug`, verifies the binary APK and cryptographic v2+ signature via `node scripts/verify-apk.mjs releases/marry-base-android.apk --require-apksigner`, and uploads the physical `.apk` artifact (`marry-base-android-apk`).
+- For production Play Store or enterprise distribution, configure a dedicated release keystore outside Git and sign `assembleRelease` with `apksigner`.

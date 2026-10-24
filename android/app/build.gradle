@@ -2,6 +2,11 @@ plugins {
     id "com.android.application"
 }
 
+def propVersionCode = (project.findProperty("marryBaseVersionCode") ?: "1").toInteger()
+def propVersionName = (project.findProperty("marryBaseVersionName") ?: "1.0.0").toString()
+def propServerUrl = (project.findProperty("marryBaseServerUrl") ?: "").toString()
+def propProjectSlug = (project.findProperty("marryBaseProjectSlug") ?: "").toString()
+
 android {
     namespace "com.marrybase.platform"
     compileSdk 34
@@ -10,29 +15,45 @@ android {
         applicationId "com.marrybase.platform"
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName "1.0.0"
+        versionCode propVersionCode
+        versionName propVersionName
+
+        resValue "string", "default_server_url", propServerUrl
+        resValue "string", "default_project_slug", propProjectSlug
     }
 
-    buildTypes {
+    signingConfigs {
         release {
-            minifyEnabled false
+            def ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
+            if (ksPath) {
+                storeFile file(ksPath)
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: ""
+                keyAlias System.getenv("ANDROID_KEY_ALIAS") ?: "marrybase"
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD") ?: ""
+            }
         }
     }
 
-    // Package the same CSP-friendly mobile hub used by the downloadable builder.
-    sourceSets {
-        main.assets.srcDir(layout.buildDirectory.dir("generated/mobileAssets"))
+    buildTypes {
+        debug {
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+            if (System.getenv("ANDROID_KEYSTORE_PATH")) {
+                signingConfig signingConfigs.release
+            }
+        }
     }
-}
 
-def mobileAssetsDir = layout.buildDirectory.dir("generated/mobileAssets")
-tasks.register("syncMobileClient", Copy) {
-    from("../../public/mobile") {
-        into "www"
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
-    into mobileAssetsDir
-}
-tasks.named("preBuild") {
-    dependsOn("syncMobileClient")
+
+    lint {
+        abortOnError true
+        checkReleaseBuilds false
+        disable "GradleDependency", "OldTargetApi", "SetJavaScriptEnabled"
+    }
 }

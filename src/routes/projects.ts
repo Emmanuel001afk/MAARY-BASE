@@ -11,6 +11,8 @@ import {
   restoreDatabaseBackup,
   verifyBackupIntegrity,
 } from "../services/backup.service.js";
+import { listErrorLogs } from "../services/diagnostics.service.js";
+import { requireOrganizationAccess } from "../services/organization.service.js";
 import {
   createEnvironment,
   createProject,
@@ -19,6 +21,7 @@ import {
   deleteProject,
   deleteProjectSecret,
   getProjectDiagnostics,
+  getProjectLiveStatusOverview,
   listApiKeys,
   listEnvironments,
   listProjectMembers,
@@ -38,7 +41,10 @@ export async function registerProjectRoutes(
 ): Promise<void> {
   app.get("/v1/projects", async (request) => {
     const user = await requirePlatformUser(request);
-    const projects = await listProjectsForUser(user);
+    const q = (request.query ?? {}) as { organizationId?: string };
+    const projects = await listProjectsForUser(user, {
+      organizationId: q.organizationId,
+    });
     return { projects };
   });
 
@@ -48,17 +54,28 @@ export async function registerProjectRoutes(
       name?: string;
       slug?: string;
       description?: string;
+      organizationId?: string;
       quotas?: Record<string, number>;
       settings?: Record<string, unknown>;
     };
     if (!body.name) {
       throw new ValidationError("Project name is required.");
     }
+    let targetOrgId: string | undefined;
+    if (body.organizationId) {
+      const { organization } = await requireOrganizationAccess(
+        body.organizationId,
+        user,
+        ["owner", "admin", "developer"]
+      );
+      targetOrgId = organization.id;
+    }
     const created = await createProject({
       name: body.name,
       slug: body.slug,
       description: body.description,
       ownerId: user.id,
+      organizationId: targetOrgId,
       quotas: body.quotas,
       settings: body.settings,
     });
@@ -71,22 +88,28 @@ export async function registerProjectRoutes(
       request,
       projectRef
     );
-    const [environments, diagnostics] = await Promise.all([
+    const [environments, diagnostics, overview] = await Promise.all([
       listEnvironments(project.id),
       getProjectDiagnostics(project),
+      getProjectLiveStatusOverview(project),
     ]);
     return {
       project,
       memberRole,
       environments,
       usage: diagnostics.usage,
+      overview,
     };
   });
 
   app.get("/v1/projects/:projectRef/diagnostics", async (request) => {
     const { projectRef } = request.params as { projectRef: string };
     const { project } = await requireProjectControlAccess(request, projectRef);
-    return getProjectDiagnostics(project);
+    const [diagnostics, overview] = await Promise.all([
+      getProjectDiagnostics(project),
+      getProjectLiveStatusOverview(project),
+    ]);
+    return { ...diagnostics, overview };
   });
 
   app.patch("/v1/projects/:projectRef", async (request) => {
@@ -99,10 +122,17 @@ export async function registerProjectRoutes(
     const body = (request.body ?? {}) as {
       name?: string;
       description?: string;
+      organizationId?: string | null;
       status?: "active" | "suspended" | "archived";
       settings?: Record<string, unknown>;
       quotas?: Record<string, number>;
     };
+    if (body.organizationId && platformUser) {
+      await requireOrganizationAccess(body.organizationId, platformUser, [
+        "owner",
+        "admin",
+      ]);
+    }
     const updated = await updateProject(
       project.id,
       body,
@@ -401,6 +431,21 @@ export async function registerProjectRoutes(
     });
   });
 
+  // Project Error & Diagnostic Logs
+  app.get("/v1/projects/:projectRef/logs/errors", async (request) => {
+    const { projectRef } = request.params as { projectRef: string };
+    const { project } = await requireProjectControlAccess(request, projectRef);
+    const q = (request.query ?? {}) as Record<string, string | undefined>;
+    const logs = await listErrorLogs({
+      projectId: project.id,
+      source: q.source,
+      severity: q.severity,
+      search: q.search,
+      limit: q.limit ? Number(q.limit) : 100,
+    });
+    return { logs };
+  });
+
   // Project Backups & Restoration
   app.get("/v1/projects/:projectRef/backups", async (request) => {
     const { projectRef } = request.params as { projectRef: string };
@@ -432,11 +477,14 @@ export async function registerProjectRoutes(
         projectRef: string;
         backupId: string;
       };
-      await requireProjectControlAccess(request, projectRef, [
-        "owner",
-        "admin",
-      ]);
-      return verifyBackupIntegrity(backupId);
+      const { project } = await requireProjectControlAccess(
+        request,
+        projectRef,
+        ["owner", "admin"]
+      );
+      return verifyBackupIntegrity(backupId, {
+        expectedProjectId: project.id,
+      });
     }
   );
 
@@ -447,13 +495,14 @@ export async function registerProjectRoutes(
         projectRef: string;
         backupId: string;
       };
-      const { platformUser } = await requireProjectControlAccess(
+      const { project, platformUser } = await requireProjectControlAccess(
         request,
         projectRef,
         ["owner", "admin"]
       );
       return restoreDatabaseBackup(backupId, {
         actorId: platformUser?.id ?? null,
+        expectedProjectId: project.id,
       });
     }
   );

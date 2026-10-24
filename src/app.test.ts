@@ -43,15 +43,29 @@ test("health and readiness endpoints return operational status and MARRY BASE pl
     assert.equal(platformRes.statusCode, 200);
     const platformBody = platformRes.json();
     assert.equal(platformBody.name, "MARRY BASE");
-    assert.equal(platformBody.status, "operational");
+    assert.ok(
+      ["operational", "degraded"].includes(platformBody.status),
+      `Unexpected platform overall status: ${platformBody.status}`
+    );
     assert.equal(platformBody.database.engine, "PostgreSQL");
+    assert.equal(platformBody.database.status, "operational_verified");
     assert.equal(platformBody.branding.logoPngUrl, "/v1/platform/logo");
     assert.equal(platformBody.branding.logoSvgUrl, "/v1/platform/logo.svg");
     assert.equal(
       platformBody.branding.apkDownloadUrl,
       "/v1/platform/apk/download"
     );
-    assert.equal(platformBody.modules.mobileApkBuilder, "operational");
+    assert.equal(platformBody.modules.controlPlane, "operational_verified");
+    assert.equal(platformBody.modules.organizations, "operational_verified");
+    assert.equal(platformBody.modules.databaseApi, "operational_verified");
+    assert.equal(platformBody.modules.rowLevelSecurity, "operational_verified");
+    assert.ok(
+      ["operational_verified", "implemented_unverified", "requires_configuration"].includes(
+        platformBody.modules.mobileApkBuilder
+      )
+    );
+    assert.ok(Array.isArray(platformBody.moduleDetails));
+    assert.ok(platformBody.moduleDetails.length >= 10);
 
     const metricsJsonRes = await app.inject({
       method: "GET",
@@ -81,6 +95,14 @@ test("dashboard routes serve MARRY BASE management interface, logo, and assets",
     assert.match(indexRes.body, /id="app-shell"/);
     assert.match(indexRes.body, /type="module" src="\/dashboard\/app\.js"/);
     assert.doesNotMatch(indexRes.body, /\sonclick=/);
+
+    const dashRes = await app.inject({ method: "GET", url: "/dashboard" });
+    assert.equal(dashRes.statusCode, 200);
+    assert.equal(dashRes.body, indexRes.body);
+
+    const dashSlashRes = await app.inject({ method: "GET", url: "/dashboard/" });
+    assert.equal(dashSlashRes.statusCode, 200);
+    assert.equal(dashSlashRes.body, indexRes.body);
 
     const jsRes = await app.inject({ method: "GET", url: "/dashboard/app.js" });
     assert.equal(jsRes.statusCode, 200);
@@ -141,8 +163,9 @@ test("dashboard routes serve MARRY BASE management interface, logo, and assets",
   }
 });
 
-test("APK builder initiates, builds, signs, and serves the MARRY BASE Android APK", async () => {
+test("Android APK endpoints enforce authentication, input validation, and truthful Gradle toolchain status", async () => {
   const app = await buildApp();
+  const slug = "artifact-check";
   try {
     const anonymousBuild = await app.inject({
       method: "POST",
@@ -150,6 +173,15 @@ test("APK builder initiates, builds, signs, and serves the MARRY BASE Android AP
       payload: { versionName: "1.0.0", versionCode: 1 },
     });
     assert.equal(anonymousBuild.statusCode, 401);
+
+    const statusRes = await app.inject({
+      method: "GET",
+      url: "/v1/platform/apk/status",
+    });
+    assert.equal(statusRes.statusCode, 200);
+    const statusBody = statusRes.json();
+    assert.equal(statusBody.androidProjectPresent, true);
+    assert.equal(statusBody.ciWorkflowPath, ".github/workflows/ci.yml");
 
     const registration = await app.inject({
       method: "POST",
@@ -161,128 +193,7 @@ test("APK builder initiates, builds, signs, and serves the MARRY BASE Android AP
     });
     assert.equal(registration.statusCode, 201, registration.body);
     const accessToken = registration.json().accessToken as string;
-    const buildRes = await app.inject({
-      method: "POST",
-      url: "/v1/platform/apk/build",
-      headers: { authorization: `Bearer ${accessToken}` },
-      payload: {
-        versionName: "1.0.0",
-        versionCode: 1,
-      },
-    });
-    assert.equal(buildRes.statusCode, 201);
-    const buildBody = buildRes.json();
-    assert.equal(buildBody.apk.platformName, "MARRY BASE");
-    assert.equal(buildBody.apk.packageName, "com.marrybase.platform");
-    assert.equal(buildBody.apk.fileName, "marry-base.apk");
-    assert.ok(buildBody.apk.sizeBytes > 10000);
-    assert.ok(buildBody.apk.entries.includes("AndroidManifest.xml"));
-    assert.ok(buildBody.apk.entries.includes("classes.dex"));
-    assert.ok(buildBody.apk.entries.includes("res/drawable/logo.png"));
-    assert.ok(buildBody.apk.entries.includes("assets/www/index.html"));
-    assert.ok(buildBody.apk.entries.includes("assets/www/styles.css"));
-    assert.ok(buildBody.apk.entries.includes("assets/www/app.js"));
-    assert.ok(buildBody.apk.entries.includes("assets/www/config.js"));
-    assert.ok(buildBody.apk.entries.includes("assets/www/app-icon.png"));
-    assert.ok(buildBody.apk.entries.includes("META-INF/MARRYBAS.RSA"));
-
-    const dlRes = await app.inject({
-      method: "GET",
-      url: "/v1/platform/apk/download",
-    });
-    assert.equal(dlRes.statusCode, 200);
-    assert.match(
-      dlRes.headers["content-type"] ?? "",
-      /application\/vnd\.android\.package-archive/
-    );
-    // ZIP/APK local file header magic bytes PK\x03\x04
-    assert.equal(dlRes.rawPayload[0], 0x50);
-    assert.equal(dlRes.rawPayload[1], 0x4b);
-    assert.equal(dlRes.rawPayload[2], 0x03);
-    assert.equal(dlRes.rawPayload[3], 0x04);
-  } finally {
-    await app.close();
-  }
-});
-
-test("project APK downloads preserve the exact built artifact, configuration, and default release", async () => {
-  const app = await buildApp();
-  const slug = "artifact-check";
-  const artifactPath = resolve(process.cwd(), "releases", `marry-base-${slug}.apk`);
-  try {
-    const registration = await app.inject({
-      method: "POST",
-      url: "/v1/platform/auth/register",
-      payload: {
-        email: `apk-artifact-${Date.now()}@maary.dev`,
-        password: "StrongPassword123!",
-      },
-    });
-    const accessToken = registration.json().accessToken as string;
     const authorization = { authorization: `Bearer ${accessToken}` };
-    const defaultBefore = await app.inject({ method: "GET", url: "/v1/platform/apk/download" });
-    assert.equal(defaultBefore.statusCode, 200);
-
-    const missing = await app.inject({
-      method: "GET",
-      url: "/v1/platform/apk/download?projectSlug=not-built-yet",
-    });
-    assert.equal(missing.statusCode, 404);
-
-    const build = await app.inject({
-      method: "POST",
-      url: "/v1/platform/apk/build",
-      headers: authorization,
-      payload: {
-        projectSlug: slug,
-        serverUrl: "https://backend.example.com/base/dashboard/",
-        versionName: "2.4.1",
-        versionCode: 42,
-      },
-    });
-    assert.equal(build.statusCode, 201, build.body);
-    assert.equal(build.json().apk.packageName, "com.marrybase.app.artifactcheck");
-    assert.equal(build.json().apk.downloadUrl, `/v1/platform/apk/download?projectSlug=${slug}`);
-
-    const downloadUrl = build.json().apk.downloadUrl as string;
-    const first = await app.inject({ method: "GET", url: downloadUrl });
-    const second = await app.inject({ method: "GET", url: downloadUrl });
-    assert.equal(first.statusCode, 200);
-    assert.equal(second.statusCode, 200);
-    assert.equal(first.headers["x-apk-sha256"], build.json().apk.checksumSha256);
-    assert.equal(second.headers["x-apk-sha256"], first.headers["x-apk-sha256"]);
-    assert.ok(first.rawPayload.equals(second.rawPayload), "A download must not rebuild or re-sign the artifact");
-
-    const entries = unpackApk(first.rawPayload);
-    const generatedConfig = entries.get("assets/www/config.js")!.toString("utf8");
-    const buildConfig = JSON.parse(entries.get("assets/marry-base-config.json")!.toString("utf8"));
-    assert.match(generatedConfig, /https:\/\/backend\.example\.com\/base/);
-    assert.match(generatedConfig, /2\.4\.1/);
-    assert.equal(buildConfig.serverUrl, "https://backend.example.com/base");
-    assert.equal(buildConfig.versionCode, 42);
-    assert.equal(buildConfig.projectSlug, slug);
-    assert.match(entries.get("assets/www/index.html")!.toString("utf8"), /Connect &amp; open Studio|Connect & open Studio/);
-    assert.match(entries.get("assets/www/index.html")!.toString("utf8"), /Content-Security-Policy/);
-    assert.doesNotMatch(entries.get("assets/www/app.js")!.toString("utf8"), /innerHTML/);
-    const dex = entries.get("classes.dex")!;
-    for (const required of [
-      "Lcom/marrybase/app/artifactcheck/MainActivity;",
-      "setJavaScriptEnabled",
-      "setDomStorageEnabled",
-      "setAllowUniversalAccessFromFileURLs",
-      "setWebViewClient",
-      "onBackPressed",
-      "canGoBack",
-    ]) {
-      assert.ok(dex.includes(Buffer.from(required)), `DEX is missing ${required}`);
-    }
-    const mobileIcon = await readFile(resolve(process.cwd(), "public", "mobile", "app-icon.png"));
-    assert.ok(entries.get("assets/www/app-icon.png")!.equals(mobileIcon));
-
-    const defaultAfter = await app.inject({ method: "GET", url: "/v1/platform/apk/download" });
-    assert.equal(defaultAfter.statusCode, 200);
-    assert.equal(defaultAfter.headers["x-apk-sha256"], defaultBefore.headers["x-apk-sha256"]);
-    assert.ok(defaultAfter.rawPayload.equals(defaultBefore.rawPayload), "Project builds must not replace the default APK");
 
     for (const payload of [
       { projectSlug: "../escape" },
@@ -298,13 +209,38 @@ test("project APK downloads preserve the exact built artifact, configuration, an
       });
       assert.equal(invalid.statusCode, 400, invalid.body);
     }
+
     const traversal = await app.inject({
       method: "GET",
       url: "/v1/platform/apk/download?projectSlug=..%2Fescape",
     });
     assert.equal(traversal.statusCode, 400);
+
+    const missing = await app.inject({
+      method: "GET",
+      url: "/v1/platform/apk/download?projectSlug=not-built-yet",
+    });
+    assert.equal(missing.statusCode, 404);
+
+    if (!statusBody.toolchain.canBuildOnHost) {
+      const noToolchainBuild = await app.inject({
+        method: "POST",
+        url: "/v1/platform/apk/build",
+        headers: authorization,
+        payload: { versionName: "1.0.0", versionCode: 1 },
+      });
+      assert.equal(noToolchainBuild.statusCode, 503);
+    }
+
+    // Verify /mobile redirects to /mobile/ and serves mobile companion assets
+    const mobileRedirect = await app.inject({ method: "GET", url: "/mobile" });
+    assert.equal(mobileRedirect.statusCode, 302);
+    assert.equal(mobileRedirect.headers.location, "/mobile/");
+
+    const mobileHtmlRes = await app.inject({ method: "GET", url: "/mobile/" });
+    assert.equal(mobileHtmlRes.statusCode, 200);
+    assert.match(mobileHtmlRes.body, /MARRY BASE/);
   } finally {
-    await rm(artifactPath, { force: true });
     await app.close();
   }
 });

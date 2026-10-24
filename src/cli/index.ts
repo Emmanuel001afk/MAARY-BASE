@@ -2,7 +2,10 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { getMigrationStatus, runMigrations } from "../db/migrate.js";
 import { closeDatabase, pool } from "../db/pool.js";
-import { buildMarryBaseApk } from "../services/apk.service.js";
+import {
+  buildAndroidApkWithGradle,
+  inspectAndroidEnvironment,
+} from "../services/android-artifact.service.js";
 import {
   createDatabaseBackup,
   listDatabaseBackups,
@@ -52,7 +55,7 @@ export async function runCli(argv: string[]): Promise<{
           "secrets set <projectSlug> <NAME> <VALUE> | secrets list <projectSlug>",
           "functions deploy <projectSlug> <fnSlug> <codeOrFile> | functions invoke <projectSlug> <fnSlug> [jsonBody]",
           "backup create [projectSlug] | backup list [projectSlug] | backup verify <backupId> | backup restore <backupId>",
-          "apk build [projectSlug] [serverUrl]",
+          "apk status | apk build [projectSlug] [serverUrl]",
         ],
       },
     };
@@ -269,9 +272,13 @@ export async function runCli(argv: string[]): Promise<{
   }
 
   if (group === "apk" || group === "apk:build") {
+    if (subcommand === "status") {
+      const status = await inspectAndroidEnvironment(rest[0]);
+      return { exitCode: 0, output: status };
+    }
     const projectSlug = subcommand === "build" ? rest[0] : subcommand;
     const serverUrl = subcommand === "build" ? rest[1] : rest[0];
-    const apk = await buildMarryBaseApk({
+    const apk = await buildAndroidApkWithGradle({
       projectSlug: projectSlug || undefined,
       serverUrl: serverUrl || undefined,
     });

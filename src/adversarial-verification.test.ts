@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { rm } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import test from "node:test";
-import { inflateRawSync } from "node:zlib";
 import { buildApp } from "./app.js";
 import { config } from "./config.js";
+import { pool } from "./db/pool.js";
+import { verifyApkPackage } from "./services/android-artifact.service.js";
 import { S3StorageAdapter } from "./services/storage.service.js";
 
 test("Critical #1: Server function isolated OS subprocess blocks sandbox escapes, filesystem access, secret leaks, and infinite loops", async () => {
@@ -250,163 +250,105 @@ test("Critical #2: Database privilege boundary enforces non-superuser role isola
   }
 });
 
-test("Critical #3: Android APK contains compiled binary AXML manifest, ARSC resource table, executable DEX bytecode, 4-byte zipalign, and PKCS#7 signature", async () => {
+test("Critical #3: Genuine Android Gradle project, CI workflow, WebView security boundaries, and APK package verifier reject fabricated archives", async () => {
   const app = await buildApp();
+  const fakeApkPath = resolve(config.BACKUP_DIR, "fake-uncompiled.apk");
   try {
-    const dlRes = await app.inject({
+    // 1. Hand-assembled APK generator must NOT exist in the repository
+    await assert.rejects(
+      () => access(resolve(process.cwd(), "src/services/apk.service.ts")),
+      "Hand-fabricated APK generator must remain deleted"
+    );
+
+    // 2. Native Android Gradle files and hardened WebView MainActivity must exist
+    const [appGradle, manifestXml, mainJava, ciYaml] = await Promise.all([
+      readFile(resolve(process.cwd(), "android/app/build.gradle"), "utf8"),
+      readFile(resolve(process.cwd(), "android/app/src/main/AndroidManifest.xml"), "utf8"),
+      readFile(
+        resolve(process.cwd(), "android/app/src/main/java/com/marrybase/platform/MainActivity.java"),
+        "utf8"
+      ),
+      readFile(resolve(process.cwd(), ".github/workflows/ci.yml"), "utf8"),
+    ]);
+
+    assert.match(appGradle, /com\.android\.application/);
+    assert.match(appGradle, /compileSdk\s+34/);
+    assert.match(appGradle, /minSdk\s+24/);
+    assert.match(manifestXml, /android:allowBackup="false"/);
+    assert.match(manifestXml, /android:usesCleartextTraffic="false"/);
+    assert.match(mainJava, /setAllowFileAccess\(false\)/);
+    assert.match(mainJava, /setAllowUniversalAccessFromFileURLs\(false\)/);
+    assert.match(mainJava, /handler\.cancel\(\)/);
+    assert.match(mainJava, /\/ready/);
+    assert.match(mainJava, /\/v1\/platform/);
+
+    // 3. GitHub Actions workflow compiles with Gradle, verifies with apksigner, and uploads physical APK
+    assert.match(ciYaml, /assembleDebug/);
+    assert.match(ciYaml, /verify-apk\.mjs.*--require-apksigner/);
+    assert.match(ciYaml, /actions\/upload-artifact@v4/);
+    assert.match(ciYaml, /\.apk/);
+
+    // 4. APK status endpoint truthfully reports Android project presence and toolchain status
+    const statusRes = await app.inject({
       method: "GET",
-      url: "/v1/platform/apk/download",
+      url: "/v1/platform/apk/status",
     });
-    assert.equal(dlRes.statusCode, 200);
-    const apk = dlRes.rawPayload;
-
-    // Parse ZIP local file headers and verify 4-byte zipalign on uncompressed entries
-    const entries = new Map<
-      string,
-      { method: number; dataOffset: number; data: Buffer }
-    >();
-    let pos = 0;
-    while (pos + 30 <= apk.length && apk.readUInt32LE(pos) === 0x04034b50) {
-      const method = apk.readUInt16LE(pos + 8);
-      const compSize = apk.readUInt32LE(pos + 18);
-      const nameLen = apk.readUInt16LE(pos + 26);
-      const extraLen = apk.readUInt16LE(pos + 28);
-      const name = apk.subarray(pos + 30, pos + 30 + nameLen).toString("utf8");
-      const dataOffset = pos + 30 + nameLen + extraLen;
-      const rawData = apk.subarray(dataOffset, dataOffset + compSize);
-      const data = method === 0 ? rawData : inflateRawSync(rawData);
-      entries.set(name, { method, dataOffset, data });
-      pos = dataOffset + compSize;
-    }
-
-    // 1. Verify resources.arsc and mipmap icons are uncompressed (STORE=0) and 4-byte aligned (zipalign 4)
-    for (const alignedEntry of [
-      "resources.arsc",
-      "res/mipmap-mdpi/ic_launcher.png",
-      "res/mipmap-hdpi/ic_launcher.png",
-      "res/mipmap-xhdpi/ic_launcher.png",
-      "res/mipmap-xxhdpi/ic_launcher.png",
-      "res/mipmap-xxxhdpi/ic_launcher.png",
-    ]) {
-      const e = entries.get(alignedEntry);
-      assert.ok(e, `Missing APK entry ${alignedEntry}`);
-      assert.equal(e.method, 0, `${alignedEntry} must be stored uncompressed`);
-      assert.equal(
-        e.dataOffset % 4,
-        0,
-        `${alignedEntry} data offset (${e.dataOffset}) must be 4-byte zipaligned`
-      );
-    }
-
-    // 2. Verify AndroidManifest.xml is compiled binary AXML (RES_XML_TYPE = 0x0003), NOT plain text XML
-    const manifest = entries.get("AndroidManifest.xml")!.data;
-    assert.equal(manifest.readUInt16LE(0), 0x0003); // RES_XML_TYPE
-    assert.equal(manifest.readUInt16LE(2), 0x0008); // headerSize = 8
-    assert.equal(manifest.readUInt32LE(4), manifest.length);
-    assert.equal(manifest.readUInt16LE(8), 0x0001); // RES_STRING_POOL_TYPE
-    const spSize = manifest.readUInt32LE(12);
-    const resMapOff = 8 + spSize;
-    assert.equal(manifest.readUInt16LE(resMapOff), 0x0180); // RES_XML_RESOURCE_MAP_TYPE
-    assert.equal(manifest.readUInt32LE(resMapOff + 8), 0x01010001); // android:label
-
-    // Android resolves namespaced attributes through the resource map, not merely
-    // their string names. Verify MainActivity's exported bit uses Android's real
-    // android.R.attr.exported ID (0x01010010) and an explicit boolean true value.
-    const stringCount = manifest.readUInt32LE(16);
-    const stringsStart = 8 + manifest.readUInt32LE(28);
-    const strings = Array.from({ length: stringCount }, (_, index) => {
-      const relativeOffset = manifest.readUInt32LE(36 + index * 4);
-      const offset = stringsStart + relativeOffset;
-      const length = manifest.readUInt16LE(offset);
-      return manifest.subarray(offset + 2, offset + 2 + length * 2).toString("utf16le");
-    });
-    let exportedAttribute: { nameIndex: number; type: number; value: number } | null = null;
-    for (let nodeOff = resMapOff + manifest.readUInt32LE(resMapOff + 4); nodeOff < manifest.length;) {
-      const nodeType = manifest.readUInt16LE(nodeOff);
-      const nodeSize = manifest.readUInt32LE(nodeOff + 4);
-      if (nodeType === 0x0102 && strings[manifest.readUInt32LE(nodeOff + 20)] === "activity") {
-        const attributeCount = manifest.readUInt16LE(nodeOff + 28);
-        for (let index = 0; index < attributeCount; index += 1) {
-          const attributeOff = nodeOff + 36 + index * 20;
-          const nameIndex = manifest.readUInt32LE(attributeOff + 4);
-          if (strings[nameIndex] === "exported") {
-            exportedAttribute = {
-              nameIndex,
-              type: manifest.readUInt8(attributeOff + 15),
-              value: manifest.readUInt32LE(attributeOff + 16),
-            };
-          }
-        }
-      }
-      if (nodeSize < 8) throw new Error("Malformed AXML node in verification test");
-      nodeOff += nodeSize;
-    }
-    assert.ok(exportedAttribute, "MainActivity must have an explicit android:exported attribute");
-    assert.equal(exportedAttribute.type, 0x12); // TYPE_INT_BOOLEAN
-    assert.equal(exportedAttribute.value, 0xffffffff);
-    assert.equal(manifest.readUInt32LE(resMapOff + 8 + exportedAttribute.nameIndex * 4), 0x01010010);
-
-    // 3. Verify resources.arsc is a compiled resource table (RES_TABLE_TYPE = 0x0002) with package 0x7f
-    const arsc = entries.get("resources.arsc")!.data;
-    assert.equal(arsc.readUInt16LE(0), 0x0002); // RES_TABLE_TYPE
-    assert.equal(arsc.readUInt32LE(4), arsc.length);
-    assert.equal(arsc.readUInt32LE(8), 1); // packageCount = 1
-
-    // 4. Verify classes.dex header, SHA-1 signature, Adler-32 checksum, and MainActivity bytecode
-    const dex = entries.get("classes.dex")!.data;
-    assert.equal(dex.subarray(0, 8).toString("ascii"), "dex\n035\0");
-    assert.equal(dex.readUInt32LE(32), dex.length);
-    const expectedSha1 = createHash("sha1").update(dex.subarray(32)).digest();
-    assert.deepEqual(dex.subarray(12, 32), expectedSha1);
-    assert.equal(dex.readUInt32LE(96), 1); // class_defs_size = 1
-    assert.ok(dex.includes(Buffer.from("Lcom/marrybase/platform/MainActivity;")));
-    assert.ok(dex.includes(Buffer.from("Landroid/webkit/WebView;")));
-    for (const method of [
-      "setJavaScriptEnabled",
-      "setDomStorageEnabled",
-      "setAllowUniversalAccessFromFileURLs",
-      "setWebViewClient",
-      "setWebChromeClient",
-      "onBackPressed",
-      "canGoBack",
-      "goBack",
-    ]) {
-      assert.ok(dex.includes(Buffer.from(method)), `MainActivity DEX must include ${method}`);
-    }
-    const mobileHtml = entries.get("assets/www/index.html")!.data.toString("utf8");
-    const mobileConfig = entries.get("assets/www/config.js")!.data.toString("utf8");
-    assert.match(mobileHtml, /Content-Security-Policy/);
-    assert.match(mobileHtml, /Connect & open Studio|Connect &amp; open Studio/);
-    assert.match(mobileConfig, /__MARRY_BASE_CONFIG__/);
-    assert.ok(entries.has("assets/www/styles.css"));
-    assert.ok(entries.has("assets/www/app.js"));
-    assert.ok(entries.has("assets/www/app-icon.png"));
-
-    // 5. Verify META-INF/MARRYBAS.RSA is an ASN.1 DER PKCS#7 SignedData structure (OID 1.2.840.113549.1.7.2)
-    const rsa = entries.get("META-INF/MARRYBAS.RSA")!.data;
-    assert.equal(rsa[0], 0x30); // ASN.1 SEQUENCE
+    assert.equal(statusRes.statusCode, 200);
+    const statusBody = statusRes.json();
+    assert.equal(statusBody.androidProjectPresent, true);
     assert.ok(
-      rsa.includes(Buffer.from("2a864886f70d010702", "hex")),
-      "MARRYBAS.RSA must contain PKCS#7 SignedData OID"
+      ["operational_verified", "implemented_unverified", "requires_configuration"].includes(
+        statusBody.status
+      )
     );
-    assert.ok(
-      rsa.includes(Buffer.from("MARRY BASE Platform", "utf8")),
-      "MARRYBAS.RSA must embed X.509 certificate for MARRY BASE Platform"
-    );
+
+    // 5. Verifier rejects non-Gradle / non-binary / unsigned files
+    await mkdir(dirname(fakeApkPath), { recursive: true });
+    await writeFile(fakeApkPath, Buffer.from("PK\x03\x04not-a-valid-compiled-apk-archive"));
+    const inspection = await verifyApkPackage(fakeApkPath);
+    assert.equal(inspection.valid, false);
   } finally {
+    await rm(fakeApkPath, { force: true });
     await app.close();
   }
 });
 
-test("High Priority #4: Full platform backup captures and restores tables, defaults, constraints, FKs, indexes, sequences, RLS, auth users, functions, and storage blobs", async () => {
+test("High Priority #4: Full platform backup enforces superadmin RBAC and captures/restores tables, defaults, constraints, FKs, indexes, sequences, RLS, auth users, functions, and storage blobs", async () => {
   const app = await buildApp();
   try {
+    // Register a non-superadmin operator (since Subtest #1 already created the initial superadmin)
+    const nonSuperReg = await app.inject({
+      method: "POST",
+      url: "/v1/platform/auth/register",
+      payload: {
+        email: `regular-op-${Date.now()}@marrybase.dev`,
+        password: "StrongPassword123!",
+        name: "Regular Operator",
+      },
+    });
+    assert.equal(nonSuperReg.statusCode, 201);
+    assert.equal(nonSuperReg.json().user.is_superadmin, false);
+    const nonSuperToken = nonSuperReg.json().accessToken as string;
+
+    // Non-superadmin MUST be blocked from full-platform backup endpoints
+    const forbiddenBackup = await app.inject({
+      method: "POST",
+      url: "/v1/platform/backups",
+      headers: { authorization: `Bearer ${nonSuperToken}` },
+      payload: { name: "unauthorized-platform-backup" },
+    });
+    assert.equal(forbiddenBackup.statusCode, 403);
+
+    // Elevate a dedicated DR superadmin in DB to run the full-platform disaster recovery workflow
     const email = `dr-admin-${Date.now()}@marrybase.dev`;
     const reg = await app.inject({
       method: "POST",
       url: "/v1/platform/auth/register",
       payload: { email, password: "StrongPassword123!", name: "DR Operator" },
     });
+    await pool.query(`UPDATE platform_users SET is_superadmin = true WHERE id = $1`, [
+      reg.json().user.id,
+    ]);
     const token = reg.json().accessToken as string;
 
     const projRes = await app.inject({
@@ -586,6 +528,9 @@ test("High Priority #4: Full platform backup captures and restores tables, defau
 test("High Priority #5: Concurrent platform operator registrations atomically enforce at most one superadmin", async () => {
   const app = await buildApp();
   try {
+    // Reset platform_users to exercise the initial 0-user bootstrap race condition directly
+    await pool.query(`DELETE FROM platform_users`);
+
     const batch = Array.from({ length: 5 }, (_, i) =>
       app.inject({
         method: "POST",
@@ -602,7 +547,20 @@ test("High Priority #5: Concurrent platform operator registrations atomically en
       assert.equal(r.statusCode, 201, r.body);
     }
 
-    const token = responses[0]!.json().accessToken as string;
+    const superWinners = responses.filter((r) => r.json().user.is_superadmin === true);
+    const ordinaryLosers = responses.filter((r) => r.json().user.is_superadmin === false);
+    assert.equal(superWinners.length, 1, "Exactly one concurrent registration may win superadmin");
+    assert.equal(ordinaryLosers.length, 4);
+
+    // Non-superadmin loser cannot list platform operators
+    const forbiddenRes = await app.inject({
+      method: "GET",
+      url: "/v1/platform/users",
+      headers: { authorization: `Bearer ${ordinaryLosers[0]!.json().accessToken}` },
+    });
+    assert.equal(forbiddenRes.statusCode, 403);
+
+    const token = superWinners[0]!.json().accessToken as string;
     const usersRes = await app.inject({
       method: "GET",
       url: "/v1/platform/users",

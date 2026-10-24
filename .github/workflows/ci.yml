@@ -1,17 +1,32 @@
-name: MARRY BASE CI & APK Artifact Build
+name: MARRY BASE CI
 
 on:
   push:
-    branches: ["main", "arena/**"]
+    branches: ["**"]
   pull_request:
-    branches: ["main"]
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    branches: ["**"]
+  workflow_dispatch:
 
 jobs:
-  verify:
+  backend:
+    name: Backend, Studio & PostgreSQL 16 Verification
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: maary
+          POSTGRES_PASSWORD: maary_ci_password
+          POSTGRES_DB: maary_base_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,41 +40,85 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Validate Management Studio modules
-        run: npm run check:studio
-
-      - name: Validate mobile client modules
-        run: npm run check:mobile
-
-      - name: Build production bundle & Android APK
-        run: npm run build
-        env:
-          APK_SIGNING_PRIVATE_KEY: ${{ secrets.APK_SIGNING_PRIVATE_KEY }}
-
-      - name: Verify APK with Android apksigner
-        run: npm run verify:apk
-
-      - name: Run adversarial & integration test suites
-        run: npm test
-
-      - name: Verify MARRY BASE Android APK & App Icon Artifacts
+      - name: Typecheck & static Studio/Mobile syntax checks
         run: |
-          test -s releases/marry-base.apk
+          npm run typecheck
+          npm run check:studio
+          npm run check:mobile
+
+      - name: Run full test suite against PostgreSQL 16
+        env:
+          NODE_ENV: test
+          PG_ADMIN_URL: postgresql://maary:maary_ci_password@127.0.0.1:5432/maary_base_test
+          JWT_SECRET: ci-test-jwt-secret-key-at-least-32-characters-long
+          MASTER_ENCRYPTION_KEY: ci-test-master-encryption-key-at-least-32-chars
+        run: |
+          idx=0
+          for test_file in src/*.test.ts; do
+            idx=$((idx + 1))
+            db_name="maary_ci_${idx}"
+            node --input-type=module -e '
+              import pg from "pg";
+              const c = new pg.Client({ connectionString: process.env.PG_ADMIN_URL });
+              await c.connect();
+              await c.query(`DROP DATABASE IF EXISTS "${process.argv[1]}"`);
+              await c.query(`CREATE DATABASE "${process.argv[1]}"`);
+              await c.end();
+            ' "$db_name"
+            echo "=== Running ${test_file} against PostgreSQL 16 (${db_name}) ==="
+            DATABASE_URL="postgresql://maary:maary_ci_password@127.0.0.1:5432/${db_name}" npx tsx --test "$test_file"
+          done
+
+      - name: Build production TypeScript bundle
+        run: npm run build
+
+      - name: Verify branded assets
+        run: |
           test -s assets/logo.png
-          test -s assets/app-icon.png
           test -s assets/logo.svg
+          test -s assets/app-icon.png
           test -s assets/app-icon.svg
-          {
-            echo "## MARRY BASE Verified Build Artifacts"
-            echo ""
-            echo "| Artifact | Size (Bytes) | SHA-256 Checksum |"
-            echo "| :--- | ---: | :--- |"
-            for f in releases/marry-base.apk assets/logo.png assets/app-icon.png assets/logo.svg assets/app-icon.svg; do
-              size=$(wc -c < "$f" | tr -d ' ')
-              sha=$(sha256sum "$f" | awk '{print $1}')
-              echo "| \`$f\` | $size | \`$sha\` |"
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
+
+  android:
+    name: Native Android Gradle APK Build & Upload
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK Platform 34 & Build-Tools 34.0.0
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Compile Android companion APK & run Android Lint via Gradle
+        run: |
+          gradle --project-dir android assembleDebug lintDebug --no-daemon --stacktrace
+          mkdir -p releases
+          cp android/app/build/outputs/apk/debug/app-debug.apk releases/marry-base-android.apk
+
+      - name: Verify compiled APK structure & Android apksigner signature
+        run: node scripts/verify-apk.mjs releases/marry-base-android.apk --require-apksigner
+
+      - name: Upload MARRY BASE Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: marry-base-android-apk
+          path: releases/marry-base-android.apk
+          if-no-files-found: error
+          retention-days: 30

@@ -584,6 +584,10 @@ export async function alterProjectTable(
     | {
         action: "drop_index";
         indexName: string;
+      }
+    | {
+        action: "toggle_rls";
+        enableRls: boolean;
       },
   actorId?: string | null
 ): Promise<TableSchemaMetadata> {
@@ -603,10 +607,35 @@ export async function alterProjectTable(
     ];
     if (col.notNull) parts.push("NOT NULL");
     if (col.unique) parts.push("UNIQUE");
-    if (col.defaultValue) {
-      parts.push(`DEFAULT ${col.defaultValue}`);
+    if (col.defaultValue !== undefined && col.defaultValue !== "") {
+      const def = col.defaultValue.trim();
+      if (
+        /^(gen_random_uuid\(\)|now\(\)|current_timestamp|true|false|-?\d+(\.\d+)?|'[a-zA-Z0-9_ -]*'::[a-z0-9_]+|'[a-zA-Z0-9_ -]*'|\{\}'::jsonb|\[\]'::jsonb)$/i.test(
+          def
+        )
+      ) {
+        parts.push(`DEFAULT ${def}`);
+      } else {
+        throw new ValidationError(
+          `Unsafe or unsupported column default expression '${def}'.`
+        );
+      }
     }
-    await pool.query(parts.join(" "));
+    if (col.references) {
+      assertValidIdentifier(col.references.table, "referenced table");
+      assertValidIdentifier(col.references.column, "referenced column");
+      const onDelete = col.references.onDelete ?? "NO ACTION";
+      if (!["CASCADE", "SET NULL", "RESTRICT", "NO ACTION"].includes(onDelete)) {
+        throw new ValidationError(`Invalid ON DELETE rule '${onDelete}'.`);
+      }
+      parts.push(
+        `REFERENCES ${schemaIdent}.${quoteIdent(col.references.table)}(${quoteIdent(col.references.column)}) ON DELETE ${onDelete}`
+      );
+    }
+    await withTransaction(async (client) => {
+      await client.query(parts.join(" "));
+      await ensureProjectSchemaPrivilegesAndTriggers(project, client);
+    });
   } else if (operation.action === "drop_column") {
     assertValidIdentifier(operation.columnName, "column");
     await pool.query(
@@ -633,6 +662,25 @@ export async function alterProjectTable(
     await pool.query(
       `DROP INDEX ${schemaIdent}.${quoteIdent(operation.indexName)}`
     );
+  } else if (operation.action === "toggle_rls") {
+    await withTransaction(async (client) => {
+      if (operation.enableRls) {
+        await client.query(
+          `ALTER TABLE ${schemaIdent}.${tableIdent} ENABLE ROW LEVEL SECURITY`
+        );
+        await client.query(
+          `ALTER TABLE ${schemaIdent}.${tableIdent} FORCE ROW LEVEL SECURITY`
+        );
+      } else {
+        await client.query(
+          `ALTER TABLE ${schemaIdent}.${tableIdent} NO FORCE ROW LEVEL SECURITY`
+        );
+        await client.query(
+          `ALTER TABLE ${schemaIdent}.${tableIdent} DISABLE ROW LEVEL SECURITY`
+        );
+      }
+      await ensureProjectSchemaPrivilegesAndTriggers(project, client);
+    });
   }
 
   await recordAuditEvent({
@@ -1219,4 +1267,107 @@ export async function enableDatabaseExtension(
     resourceId: normalized,
   });
   return { name: normalized, installed: true };
+}
+
+export async function getProjectDatabaseDiagnostics(
+  project: ProjectRecord
+): Promise<{
+  postgresVersion: string;
+  poolStats: ReturnType<typeof pool.getStats>;
+  schemaName: string;
+  ownerRole: string;
+  rlsRole: string;
+  isolationVerified: boolean;
+  roles: Array<{
+    name: string;
+    isSuperuser: boolean;
+    bypassRls: boolean;
+    canCreateInPublic: boolean;
+    hasSchemaUsage: boolean;
+  }>;
+  statementTimeoutMs: number;
+  maxRowsPerQuery: number;
+  tableStats: Array<{
+    name: string;
+    estimatedRows: number;
+    totalBytes: number;
+    rlsEnabled: boolean;
+    rlsForced: boolean;
+  }>;
+  extensions: Awaited<ReturnType<typeof listDatabaseExtensions>>;
+}> {
+  const rlsRole = `${project.db_role_name}_rls`;
+  const [verRes, roleRes, tblStatsRes, extensions] = await Promise.all([
+    pool.query<{ version: string }>("SELECT version()"),
+    pool.query<{
+      rolname: string;
+      rolsuper: boolean;
+      rolbypassrls: boolean;
+      can_create_public: boolean;
+      has_schema_usage: boolean;
+    }>(
+      `SELECT
+         r.rolname,
+         r.rolsuper,
+         r.rolbypassrls,
+         has_schema_privilege(r.rolname, 'public', 'CREATE') AS can_create_public,
+         has_schema_privilege(r.rolname, $2, 'USAGE') AS has_schema_usage
+       FROM pg_roles r
+       WHERE r.rolname = ANY($1::text[])
+       ORDER BY r.rolname ASC`,
+      [[project.db_role_name, rlsRole], project.schema_name]
+    ),
+    pool.query<{
+      table_name: string;
+      est_rows: number;
+      total_bytes: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>(
+      `SELECT
+         c.relname AS table_name,
+         GREATEST(c.reltuples::bigint, 0)::int AS est_rows,
+         pg_total_relation_size(c.oid)::text AS total_bytes,
+         c.relrowsecurity,
+         c.relforcerowsecurity
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = $1 AND c.relkind = 'r'
+       ORDER BY c.relname ASC`,
+      [project.schema_name]
+    ),
+    listDatabaseExtensions(),
+  ]);
+
+  const roles = roleRes.rows.map((r) => ({
+    name: r.rolname,
+    isSuperuser: r.rolsuper,
+    bypassRls: r.rolbypassrls,
+    canCreateInPublic: r.can_create_public,
+    hasSchemaUsage: r.has_schema_usage,
+  }));
+
+  const isolationVerified =
+    roles.length === 2 &&
+    roles.every((r) => !r.isSuperuser && !r.bypassRls && !r.canCreateInPublic && r.hasSchemaUsage);
+
+  return {
+    postgresVersion: verRes.rows[0]?.version ?? "PostgreSQL",
+    poolStats: pool.getStats(),
+    schemaName: project.schema_name,
+    ownerRole: project.db_role_name,
+    rlsRole,
+    isolationVerified,
+    roles,
+    statementTimeoutMs: config.STATEMENT_TIMEOUT_MS,
+    maxRowsPerQuery: project.quotas?.maxRowsPerQuery ?? config.MAX_QUERY_ROWS,
+    tableStats: tblStatsRes.rows.map((t) => ({
+      name: t.table_name,
+      estimatedRows: t.est_rows ?? 0,
+      totalBytes: Number(t.total_bytes ?? 0),
+      rlsEnabled: t.relrowsecurity,
+      rlsForced: t.relforcerowsecurity,
+    })),
+    extensions,
+  };
 }

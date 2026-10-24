@@ -1,101 +1,64 @@
-# MAARY BASE Architecture
+# MARRY BASE Architecture
 
-## 1. Architectural Principles & Module Boundaries
-
-MAARY BASE is structured into clearly separated layers with explicit contracts:
+## 1. Layered System Boundaries
 
 ```text
-Clients / Dashboard / SDK / CLI
+Management Studio (public/dashboard) · Android App (android/) · SDK (src/sdk) · CLI (src/cli)
         │
         ▼
-Fastify HTTP & WebSocket API Layer (src/routes/*, src/middleware/auth.middleware.ts)
+Fastify HTTP & WebSocket API Layer (src/app.ts, src/routes/*, src/middleware/auth.middleware.ts)
         │
-        ├── Control Plane Service (src/services/project.service.ts, platform-auth.service.ts)
-        ├── Database & Migration Service (src/services/database.service.ts)
-        ├── Data API & OpenAPI Engine (src/services/data-api.service.ts)
-        ├── Project Identity & Auth Service (src/services/project-auth.service.ts)
-        ├── Object Storage Service (src/services/storage.service.ts)
-        ├── Realtime Broker (src/services/realtime.service.ts)
-        ├── Functions & Background Queue Service (src/services/functions-jobs.service.ts)
-        └── Backup & Audit Service (src/services/backup.service.ts, audit.service.ts)
+        ├── Platform Auth & Superadmin RBAC (src/services/platform-auth.service.ts)
+        ├── Organizations & Inherited Team RBAC (src/services/organization.service.ts)
+        ├── Project Lifecycle, Keys & Encrypted Secrets (src/services/project.service.ts)
+        ├── Database Schema, Alter, Migrations & Diagnostics (src/services/database.service.ts)
+        ├── PostgREST-Compatible Data API & OpenAPI 3.1 (src/services/data-api.service.ts)
+        ├── Project End-User Auth, Sessions & OAuth (src/services/project-auth.service.ts)
+        ├── Object Storage, Policies & Signed URLs (src/services/storage.service.ts)
+        ├── WebSocket Realtime Broker & Change Capture (src/services/realtime.service.ts)
+        ├── Isolated Child-Worker Functions & Job Queue (src/services/functions-jobs.service.ts)
+        ├── Live Module Diagnostics & Error Logging (src/services/diagnostics.service.ts)
+        └── Disaster-Recovery Backups & Gradle APK Inspector (src/services/backup.service.ts, android-artifact.service.ts)
         │
         ▼
-Unified PostgreSQL Pool & Transaction Layer (src/db/pool.ts)
+Unified PostgreSQL Pool & RLS Transaction Layer (src/db/pool.ts)
         │
         ▼
-PostgreSQL Engine (External PostgreSQL via pg.Pool OR Embedded PostgreSQL via PGlite)
+PostgreSQL 16+ (pg.Pool)  OR  Embedded PGlite (local dev / test)
 ```
-
-### Management Studio Boundaries
-
-The browser studio is a static, dependency-free ES-module application under `public/dashboard/`. Fastify serves an explicit allowlist of its HTML, CSS, and JavaScript assets from `src/routes/dashboard.ts`; production Docker images copy the same `public/` directory. There is no frontend framework runtime or client-side build artifact to keep synchronized.
-
-- `app.js` owns operator authentication, project selection, hash routing, global keyboard commands, and shell state.
-- `js/core.js` owns the fetch wrapper, rotating access-token renewal, shared state, escaped rendering, formatting, dialogs, and notifications.
-- `js/pages.js` owns view templates and stale-request-aware data loaders.
-- `js/actions.js` owns mutations, native form workflows, confirmations, uploads, and realtime connections.
-
-All studio API calls remain same-origin and use the existing control-plane authorization boundaries. Dynamic API values are escaped before HTML insertion, credentials are not revealed in ordinary key lists, and destructive operations require explicit confirmation. The Content Security Policy continues to permit scripts only from the same origin.
-
-### Android Client & APK Artifact Boundaries
-
-The mobile hub is a separate static client under `public/mobile/`. Its CSP permits local scripts/styles and HTTP(S) readiness requests but no inline script. `config.js` is generated as escaped JSON data for each APK; the HTML remains configuration-independent. The hub stores only the last working server URL in WebView local storage, then hands authentication and project workflows to the full Management Studio.
-
-`src/services/apk.service.ts` compiles binary Android XML/resources and the actual `MainActivity` DEX. The activity enables JavaScript, DOM storage, trusted local-client network access, WebView/Chrome clients, and WebView history navigation. This generated DEX—not only the readable Gradle source under `android/`—is what the downloadable APK executes. Android backups are disabled so WebView authentication storage is not exported through OS backup.
-
-Default and project APKs have distinct artifact lifecycles. A project build writes only `releases/marry-base-<slug>.apk`; subsequent `GET /v1/platform/apk/download?projectSlug=<slug>` requests read that exact signed file. Missing artifacts return 404 instead of silently rebuilding with default configuration. Slugs, server URLs, version names, and version codes are validated before packaging.
 
 ---
 
 ## 2. Multi-Project Isolation & PostgreSQL Row-Level Security
 
-Every project created on MAARY BASE receives:
-1. **Dedicated PostgreSQL Schema (`proj_<slug>`)**: All project tables, views, indexes, sequences, and RPC functions reside inside `"proj_<slug>"`, cleanly separated from platform control-plane tables (`public.platform_*`).
-2. **Dedicated PostgreSQL Database Role (`role_<slug>`)**: A non-superuser role with `USAGE` granted only on `"proj_<slug>"` and the `auth` helper schema. It has zero privileges on `public.platform_*` or any other project's schema (`proj_<other>`).
-3. **Transactional RLS Context (`withRlsTransaction`)**:
-   - Every project Data API query and non-service SQL query runs inside a transaction that configures:
-     - `SET LOCAL search_path TO "proj_<slug>", auth, public`
-     - `SET LOCAL statement_timeout = <ms>`
-     - `set_config('request.jwt.claim.sub', <userId>, true)`
-     - `set_config('request.jwt.claim.role', <role>, true)`
-     - `set_config('request.jwt.claim.email', <email>, true)`
-     - `set_config('request.jwt.claim.project_id', <projectId>, true)`
-     - `set_config('request.jwt.claims', <json>, true)`
-     - `SET LOCAL ROLE "role_<slug>"` (unless `service_role` bypass is explicitly authorized).
-   - PostgreSQL natively evaluates all `ENABLE ROW LEVEL SECURITY` / `FORCE ROW LEVEL SECURITY` policies (`USING` and `WITH CHECK` expressions) referencing `auth.uid()`, `auth.role()`, `auth.email()`, and `auth.jwt()`.
+Every provisioned project receives strict database-level isolation:
+
+1. **Dedicated Schema (`proj_<slug>`)**: User tables, indexes, sequences, and RPC functions live inside `"proj_<slug>"`, isolated from `public.platform_*` control-plane metadata and all sibling projects.
+2. **Dual Least-Privilege Roles (`003_security_hardening.sql`)**:
+   - `role_<slug>`: Schema owner role (`NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOBYPASSRLS`) used only for controlled schema DDL and `service_role` operations.
+   - `role_<slug>_rls`: Client execution role without table ownership, guaranteeing that `ENABLE ROW LEVEL SECURITY` and `FORCE ROW LEVEL SECURITY` policies cannot be bypassed by `anon` or `authenticated` requests.
+   - `PUBLIC` create privileges are revoked so project roles cannot create objects outside their assigned schema.
+3. **Transactional Claims (`withRlsTransaction`)**:
+   - Configures `SET LOCAL search_path`, `SET LOCAL statement_timeout`, `request.jwt.claim.{sub,role,email,project_id}`, and `SET LOCAL ROLE` inside a single transaction for every Data API and impersonated SQL query.
 
 ---
 
-## 3. Authentication, Token Rotation & Security Model
+## 3. Control-Plane RBAC: Superadmin vs Workspace vs Project
 
-- **Password Storage**: Passwords are hashed using `node:crypto` `scrypt` with 16-byte random per-user salts and verified using `timingSafeEqual`.
-- **Refresh Token Rotation & Reuse Detection**:
-  - Refresh tokens are stored as SHA-256 hashes in `project_auth_sessions` grouped by `token_family_id`.
-  - When a refresh token is exchanged, it is marked `replaced_at = now()` and a new token is issued in the same family.
-  - If a previously rotated refresh token is replayed, MAARY BASE detects token theft/reuse, immediately revokes every session in that `token_family_id`, and records a `auth.token.reuse_detected` security audit event.
-- **API Keys & Secrets**:
-  - Project API keys (`mb_anon_...`, `mb_service_...`, `mb_key_...`) are stored by their SHA-256 hash (`key_hash`) for authentication lookup, alongside an AES-256-GCM encrypted copy (`encrypted_key`) for authorized control-plane inspection.
-  - Project environment secrets (`platform_secrets`) are encrypted at rest using AES-256-GCM with a random 12-byte IV and 16-byte authentication tag derived from `ENCRYPTION_KEY`.
+- **Platform Superadmin (`platform_users.is_superadmin`)**: Required for instance-wide administration (`/v1/platform/users`, `/v1/platform/extensions`, `/v1/platform/backups`, `/v1/platform/audit`, `/v1/platform/logs/errors`). Initial bootstrap is serialized with `LOCK TABLE platform_users IN EXCLUSIVE MODE` and gated by `PLATFORM_BOOTSTRAP_TOKEN` in production.
+- **Organizations (`platform_organizations`)**: Group multiple projects under shared team roles (`owner`, `admin`, `developer`, `viewer`). Workspace members inherit project access automatically; when both workspace and direct project memberships exist, the higher role wins.
+- **Backup Tenant Isolation**: Project-scoped backup verification and restoration enforce `expectedProjectId`, blocking cross-project IDOR access to other projects' or platform-wide snapshots.
 
 ---
 
-## 4. Realtime Delivery Guarantees
+## 4. Isolated Function Worker & Durable Background Queue
 
-- Every table created in a project schema has an `AFTER INSERT OR UPDATE OR DELETE` trigger (`maary_realtime_trigger`) calling `public.maary_capture_row_change()`.
-- Because the trigger executes within the same PostgreSQL transaction as the row mutation, change events are only committed to `platform_realtime_events` if the transaction commits.
-- The `RealtimeBroker` dispatches committed events over WebSocket to subscribed clients and supports `lastEventId` cursor replay on reconnect, providing **at-least-once delivery within the event retention window** (not claiming distributed exactly-once delivery).
-
----
-
-## 5. Server Functions & Background Queue Isolation
-
-- Server functions execute inside a restricted `node:vm` context with `codeGeneration: { strings: false, wasm: false }` and a hard CPU/async execution timeout (`timeout_ms`).
-- Host globals (`process`, `require`, `fs`, `child_process`) are not exposed to the sandbox. Database access is provided exclusively via `ctx.db.query()`, which executes through `executeProjectSql` inside the project's isolated schema and caller RLS context.
-- Background jobs (`platform_jobs`) support priorities, delayed execution (`run_at`), `idempotency_key` deduplication, exponential backoff retries (`2^(attempt-1)` seconds), and transition to `dead_letter` when `attempts >= max_attempts`.
+- **Child-Process Worker Isolation**: Server functions execute in a dedicated short-lived Node.js child process (`node --permission --disallow-code-generation-from-strings --max-old-space-size=64`) with stripped environment variables and hard kill timeouts. Database queries from `ctx.db.query()` proxy back over IPC through `executeProjectSql` within the project's isolated schema.
+- **Durable Jobs & SSRF Protection**: Background jobs (`platform_jobs`) claim work with `FOR UPDATE SKIP LOCKED`, support manual retry (`POST /jobs/:id/retry`), exponential backoff, dead-letter transitions, and outbound `webhook` delivery guarded against loopback/link-local/RFC1918 SSRF targets unless `WEBHOOK_ALLOW_PRIVATE_NETWORKS=true`.
 
 ---
 
-## 6. Infrastructure Boundaries & Limitations
+## 5. Truthful Observability & Android Companion Architecture
 
-- **High Availability & Replication**: Running multiple stateless MAARY BASE API containers behind a load balancer requires an external shared PostgreSQL instance (`DATABASE_URL=postgres://...`) and shared object storage volume/S3 bucket. Database replication, failover, and WAL archiving are responsibilities of the underlying PostgreSQL cluster rather than the API process.
-- **Function Runtime**: The built-in `node:vm` sandbox isolates JavaScript execution with timeouts and restricted globals within the Node.js process. For untrusted multi-tenant public cloud hosting against adversarial native-code exploits, pair with container/microVM-level isolation (e.g., gVisor or Firecracker).
+- **Truthful Module States**: `evaluatePlatformModules()` and `getProjectLiveStatusOverview()` probe actual database queries, migration state, filesystem writability, worker liveness, and compiled APK availability — returning accurate states (`operational_verified`, `implemented_unverified`, `partially_implemented`, `requires_configuration`, `unavailable`, `failed`).
+- **Native Android App (`android/`)**: Standard Android Gradle project (`com.marrybase.platform`, `MainActivity.java`) implementing native `/ready` + `/v1/platform` verification, HTTPS enforcement for remote hosts (with explicit local/LAN HTTP opt-in), `SharedPreferences` URL persistence, origin-locked `WebView` with file/content access disabled, SSL error cancellation, and inline connection recovery.

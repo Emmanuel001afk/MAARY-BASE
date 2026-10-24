@@ -1,64 +1,144 @@
-import { readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { delimiter, join, resolve } from "node:path";
+import { inflateRawSync } from "node:zlib";
 
-const apk = resolve(process.argv[2] || "releases/marry-base.apk");
-const executableName = process.platform === "win32" ? "apksigner.bat" : "apksigner";
+const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith("--")));
+const requireApksigner = flags.has("--require-apksigner");
+
+const apkPath = resolve(
+  args[0] || "android/app/build/outputs/apk/debug/app-debug.apk"
+);
+
+if (!existsSync(apkPath)) {
+  throw new Error(`APK file does not exist: ${apkPath}`);
+}
+
+const fileStat = statSync(apkPath);
+if (!fileStat.isFile() || fileStat.size < 10_240) {
+  throw new Error(
+    `APK file is empty or unexpectedly small (${fileStat.size} bytes): ${apkPath}`
+  );
+}
+
+const buf = readFileSync(apkPath);
+if (buf.readUInt32LE(0) !== 0x04034b50) {
+  throw new Error(`Invalid ZIP local header magic in ${apkPath}`);
+}
+
+let eocdOffset = -1;
+const minOffset = Math.max(0, buf.length - 22 - 65_535);
+for (let offset = buf.length - 22; offset >= minOffset; offset -= 1) {
+  if (
+    buf.readUInt32LE(offset) === 0x06054b50 &&
+    offset + 22 + buf.readUInt16LE(offset + 20) <= buf.length
+  ) {
+    eocdOffset = offset;
+    break;
+  }
+}
+if (eocdOffset < 0) {
+  throw new Error(`Missing ZIP End of Central Directory (EOCD) in ${apkPath}`);
+}
+
+const totalEntries = buf.readUInt16LE(eocdOffset + 10);
+const centralDirOffset = buf.readUInt32LE(eocdOffset + 16);
+const entries = new Map();
+
+let ptr = centralDirOffset;
+for (let i = 0; i < totalEntries && ptr + 46 <= eocdOffset; i += 1) {
+  if (buf.readUInt32LE(ptr) !== 0x02014b50) break;
+  const method = buf.readUInt16LE(ptr + 10);
+  const compSize = buf.readUInt32LE(ptr + 20);
+  const nameLen = buf.readUInt16LE(ptr + 28);
+  const extraLen = buf.readUInt16LE(ptr + 30);
+  const commentLen = buf.readUInt16LE(ptr + 32);
+  const localOffset = buf.readUInt32LE(ptr + 42);
+  const name = buf.subarray(ptr + 46, ptr + 46 + nameLen).toString("utf8");
+  entries.set(name, { method, compSize, localOffset });
+  ptr += 46 + nameLen + extraLen + commentLen;
+}
+
+function extractEntry(name) {
+  const meta = entries.get(name);
+  if (!meta) {
+    throw new Error(`APK is missing required entry '${name}'`);
+  }
+  const lNameLen = buf.readUInt16LE(meta.localOffset + 26);
+  const lExtraLen = buf.readUInt16LE(meta.localOffset + 28);
+  const start = meta.localOffset + 30 + lNameLen + lExtraLen;
+  const raw = buf.subarray(start, start + meta.compSize);
+  return meta.method === 0 ? raw : inflateRawSync(raw);
+}
+
+const manifest = extractEntry("AndroidManifest.xml");
+if (manifest.readUInt16LE(0) !== 0x0003) {
+  throw new Error("AndroidManifest.xml is not compiled binary AXML (0x0003)");
+}
+
+const arsc = extractEntry("resources.arsc");
+if (arsc.readUInt16LE(0) !== 0x0002) {
+  throw new Error("resources.arsc is not a compiled Android resource table (0x0002)");
+}
+
+const dex = extractEntry("classes.dex");
+if (dex.subarray(0, 4).toString("ascii") !== "dex\n") {
+  throw new Error("classes.dex does not begin with Dalvik executable magic ('dex\\n')");
+}
+if (!dex.includes(Buffer.from("Lcom/marrybase/platform/MainActivity;"))) {
+  throw new Error("classes.dex does not contain compiled MainActivity class");
+}
 
 function findApksigner() {
-  if (process.env.APKSIGNER) return process.env.APKSIGNER;
-  const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT;
-  if (!sdk) return executableName;
-  const buildTools = resolve(sdk, "build-tools");
-  let versions;
-  try {
-    versions = readdirSync(buildTools, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  } catch {
-    return executableName;
+  const exe = process.platform === "win32" ? "apksigner.bat" : "apksigner";
+  for (const dir of (process.env.PATH || "").split(delimiter)) {
+    if (dir && existsSync(join(dir, exe))) return join(dir, exe);
   }
-  return versions.length
-    ? resolve(buildTools, versions.at(-1), executableName)
-    : executableName;
+  for (const root of [process.env.ANDROID_SDK_ROOT, process.env.ANDROID_HOME]) {
+    if (!root || !existsSync(join(root, "build-tools"))) continue;
+    const versions = readdirSync(join(root, "build-tools")).sort().reverse();
+    for (const ver of versions) {
+      const candidate = join(root, "build-tools", ver, exe);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
 }
 
-function verify(command, prefix, extraArgs = []) {
-  const result = spawnSync(
-    command,
-    [...prefix, "verify", "--verbose", "--print-certs", ...extraArgs, apk],
-    { encoding: "utf8", shell: process.platform === "win32" }
+const apksigner = findApksigner();
+if (apksigner) {
+  const cmd = process.platform === "win32" ? "cmd.exe" : apksigner;
+  const cmdArgs =
+    process.platform === "win32"
+      ? ["/c", apksigner, "verify", "--verbose", "--print-certs", apkPath]
+      : ["verify", "--verbose", "--print-certs", apkPath];
+  const res = spawnSync(cmd, cmdArgs, { encoding: "utf8" });
+  if (res.status !== 0) {
+    process.stderr.write(res.stdout || "");
+    process.stderr.write(res.stderr || "");
+    throw new Error(`Android apksigner rejected ${apkPath}`);
+  }
+  process.stdout.write(res.stdout);
+} else if (requireApksigner) {
+  throw new Error(
+    "apksigner was required (--require-apksigner) but not found in PATH or ANDROID_SDK_ROOT/build-tools."
   );
-  process.stdout.write(result.stdout || "");
-  process.stderr.write(result.stderr || "");
-  if (result.error) throw result.error;
-  if (result.status !== 0 || !/^Verifies$/m.test(result.stdout)) {
-    throw new Error(`Android apksigner rejected ${apk}`);
-  }
-  return result.stdout;
 }
 
-let command;
-let prefix;
-if (process.env.APKSIGNER_JAR) {
-  command = process.env.JAVA || "java";
-  prefix = ["-jar", resolve(process.env.APKSIGNER_JAR)];
-} else {
-  command = findApksigner();
-  prefix = [];
-}
-
-const standard = verify(command, prefix);
-if (!/^Verified using v2 scheme \(APK Signature Scheme v2\): true$/m.test(standard)) {
-  throw new Error("APK Signature Scheme v2 verification is required");
-}
-
-// The application supports API 24+, where v2 is sufficient. Also exercise the
-// retained JAR signature at API 23 so a broken v1 block cannot go unnoticed.
-const legacy = verify(command, prefix, ["--min-sdk-version", "23"]);
-if (!/^Verified using v1 scheme \(JAR signing\): true$/m.test(legacy)) {
-  throw new Error("The retained APK v1/JAR signature did not verify");
-}
-
-console.log(`APK signature verification passed: ${apk}`);
+const sha256 = createHash("sha256").update(buf).digest("hex");
+console.log(
+  JSON.stringify(
+    {
+      verified: true,
+      apkPath,
+      sizeBytes: fileStat.size,
+      entriesCount: entries.size,
+      sha256,
+      apksignerVerified: Boolean(apksigner),
+    },
+    null,
+    2
+  )
+);

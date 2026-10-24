@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { config } from "../config.js";
 import { pool, withTransaction } from "../db/pool.js";
-import { NotFoundError, ValidationError } from "../lib/errors.js";
+import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors.js";
 import { assertValidIdentifier, quoteIdent } from "../lib/sql-safety.js";
 import { recordAuditEvent } from "./audit.service.js";
 import {
@@ -513,13 +513,24 @@ export async function getDatabaseBackupById(
   return normalizeBackupRow(res.rows[0]);
 }
 
-export async function verifyBackupIntegrity(backupId: string): Promise<{
+export async function verifyBackupIntegrity(
+  backupId: string,
+  options: { expectedProjectId?: string } = {}
+): Promise<{
   backup: BackupRecord;
   valid: boolean;
   actualChecksum: string;
   expectedChecksum: string;
 }> {
   const backup = await getDatabaseBackupById(backupId);
+  if (
+    options.expectedProjectId !== undefined &&
+    backup.project_id !== options.expectedProjectId
+  ) {
+    throw new ForbiddenError(
+      "Cross-project access denied: backup belongs to a different project or platform scope."
+    );
+  }
   let buf: Buffer;
   try {
     buf = await readFile(backup.file_path);
@@ -539,7 +550,7 @@ export async function verifyBackupIntegrity(backupId: string): Promise<{
 
 export async function restoreDatabaseBackup(
   backupId: string,
-  options: { actorId?: string | null } = {}
+  options: { actorId?: string | null; expectedProjectId?: string } = {}
 ): Promise<{
   backup: BackupRecord;
   restoredProjects: number;
@@ -549,7 +560,9 @@ export async function restoreDatabaseBackup(
   restoredAuthUsers: number;
   restoredStorageObjects: number;
 }> {
-  const verification = await verifyBackupIntegrity(backupId);
+  const verification = await verifyBackupIntegrity(backupId, {
+    expectedProjectId: options.expectedProjectId,
+  });
   if (!verification.valid) {
     throw new ValidationError(
       `Backup integrity check failed: expected SHA-256 ${verification.expectedChecksum}, got ${verification.actualChecksum}. Refusing to restore corrupted backup.`

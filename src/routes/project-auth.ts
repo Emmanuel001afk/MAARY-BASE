@@ -10,6 +10,8 @@ import {
 import {
   adminCreateProjectUser,
   adminDeleteProjectUser,
+  adminListProjectSessions,
+  adminRevokeProjectSession,
   adminUpdateProjectUser,
   createOAuthAuthorizationUrl,
   exchangeOAuthIdentity,
@@ -401,6 +403,38 @@ export async function registerProjectAuthRoutes(
         platformUser?.id ?? null
       );
       return { deleted: true, userId };
+    }
+  );
+
+  app.get("/v1/projects/:projectRef/auth/admin/sessions", async (request) => {
+    const { projectRef } = request.params as { projectRef: string };
+    const { project } = await requireProjectControlAccess(request, projectRef);
+    const q = (request.query ?? {}) as { limit?: string };
+    const sessions = await adminListProjectSessions(
+      project.id,
+      q.limit ? Number(q.limit) : 100
+    );
+    return { sessions };
+  });
+
+  app.delete(
+    "/v1/projects/:projectRef/auth/admin/sessions/:sessionId",
+    async (request) => {
+      const { projectRef, sessionId } = request.params as {
+        projectRef: string;
+        sessionId: string;
+      };
+      const { project, platformUser } = await requireProjectControlAccess(
+        request,
+        projectRef,
+        ["owner", "admin"]
+      );
+      await adminRevokeProjectSession(
+        project.id,
+        sessionId,
+        platformUser?.id ?? null
+      );
+      return { revoked: true, sessionId };
     }
   );
 }

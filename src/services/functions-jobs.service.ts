@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { createInterface } from "node:readline";
 import vm from "node:vm";
 import { config } from "../config.js";
@@ -881,6 +883,177 @@ export async function cancelBackgroundJob(
   return res.rows[0];
 }
 
+export async function retryBackgroundJob(
+  projectId: string,
+  jobId: string
+): Promise<BackgroundJobRecord> {
+  const res = await pool.query<BackgroundJobRecord>(
+    `UPDATE platform_jobs
+     SET status = 'queued',
+         attempts = 0,
+         last_error = NULL,
+         run_at = now(),
+         locked_at = NULL,
+         locked_by = NULL,
+         updated_at = now()
+     WHERE id = $1 AND project_id = $2 AND status IN ('failed', 'dead_letter', 'cancelled')
+     RETURNING *`,
+    [jobId, projectId]
+  );
+  if (!res.rows[0]) {
+    throw new ValidationError(
+      "Only failed, dead_letter, or cancelled jobs can be retried."
+    );
+  }
+  return res.rows[0];
+}
+
+export function isPrivateOrLoopbackAddress(address: string): boolean {
+  const normalized = address.trim().toLowerCase();
+  if (normalized === "localhost") return true;
+
+  // Unwrap IPv4-mapped IPv6 addresses like ::ffff:127.0.0.1
+  const v4Mapped = normalized.startsWith("::ffff:")
+    ? normalized.slice(7)
+    : normalized;
+
+  const ipVer = isIP(v4Mapped);
+  if (ipVer === 4) {
+    const parts = v4Mapped.split(".").map((p) => Number(p));
+    const [a = 0, b = 0] = parts;
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true; // Cloud metadata / link-local
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true; // Carrier-grade NAT
+    return false;
+  }
+
+  if (isIP(normalized) === 6) {
+    if (normalized === "::" || normalized === "::1") return true;
+    if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true; // ULA fc00::/7
+    if (
+      normalized.startsWith("fe8") ||
+      normalized.startsWith("fe9") ||
+      normalized.startsWith("fea") ||
+      normalized.startsWith("feb")
+    ) {
+      return true; // Link-local fe80::/10
+    }
+  }
+
+  return false;
+}
+
+async function deliverWebhookJob(
+  job: BackgroundJobRecord,
+  allowPrivateOverride?: boolean
+): Promise<Record<string, unknown>> {
+  const rawUrl = String(job.payload.url ?? "").trim();
+  if (!rawUrl) {
+    throw new Error("webhook job requires payload.url.");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`Invalid webhook target URL '${rawUrl}'.`);
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      `Unsupported webhook protocol '${parsed.protocol}'. Only http: and https: are allowed.`
+    );
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("Webhook URL must not contain embedded credentials.");
+  }
+
+  const allowPrivate =
+    allowPrivateOverride ?? config.WEBHOOK_ALLOW_PRIVATE_NETWORKS;
+  if (!allowPrivate) {
+    const hostLiteral = parsed.hostname.replace(/^\[|\]$/g, "");
+    if (isPrivateOrLoopbackAddress(hostLiteral)) {
+      throw new Error(
+        `Webhook blocked by SSRF policy: private or loopback host '${hostLiteral}' is disallowed.`
+      );
+    }
+    const resolved = await lookup(hostLiteral, { all: true });
+    if (!resolved.length) {
+      throw new Error(`Webhook DNS resolution returned no addresses for '${hostLiteral}'.`);
+    }
+    for (const addr of resolved) {
+      if (isPrivateOrLoopbackAddress(addr.address)) {
+        throw new Error(
+          `Webhook blocked by SSRF policy: '${hostLiteral}' resolved to private/loopback address '${addr.address}'.`
+        );
+      }
+    }
+  }
+
+  const method = String(job.payload.method ?? "POST").toUpperCase();
+  if (!["POST", "PUT", "PATCH", "GET", "DELETE"].includes(method)) {
+    throw new Error(`Unsupported webhook HTTP method '${method}'.`);
+  }
+
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "user-agent": "MARRY-BASE-Webhook/1.0",
+    "x-marry-base-job-id": job.id,
+    "x-marry-base-project-id": job.project_id,
+  };
+  if (job.payload.headers && typeof job.payload.headers === "object") {
+    for (const [k, v] of Object.entries(
+      job.payload.headers as Record<string, unknown>
+    )) {
+      const lower = k.toLowerCase();
+      if (
+        typeof v === "string" &&
+        !["host", "content-length", "connection", "transfer-encoding"].includes(
+          lower
+        )
+      ) {
+        headers[k] = v;
+      }
+    }
+  }
+
+  const timeoutMs = Math.min(Math.max(job.timeout_ms || 10_000, 500), 30_000);
+  const started = Date.now();
+  const bodyPayload =
+    method === "GET"
+      ? undefined
+      : JSON.stringify(job.payload.body ?? { jobId: job.id, event: "webhook" });
+
+  const response = await fetch(parsed.toString(), {
+    method,
+    headers,
+    body: bodyPayload,
+    redirect: "error",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  const text = (await response.text()).slice(0, 1024);
+  const durationMs = Date.now() - started;
+
+  if (!response.ok) {
+    throw new Error(
+      `Webhook endpoint returned HTTP ${response.status}: ${text.slice(0, 240)}`
+    );
+  }
+
+  return {
+    delivered: true,
+    targetUrl: parsed.toString(),
+    method,
+    statusCode: response.status,
+    durationMs,
+    responsePreview: text,
+    deliveredAt: new Date().toISOString(),
+  };
+}
+
 export async function executeSingleJob(
   job: BackgroundJobRecord
 ): Promise<BackgroundJobRecord> {
@@ -945,15 +1118,7 @@ export async function executeSingleJob(
       const cleaned = await cleanupAbandonedMultipartUploads(project.id);
       resultPayload = cleaned;
     } else if (job.job_type === "webhook") {
-      const url = String(job.payload.url ?? "");
-      if (!url) {
-        throw new Error("webhook job requires payload.url.");
-      }
-      resultPayload = {
-        delivered: true,
-        targetUrl: url,
-        deliveredAt: new Date().toISOString(),
-      };
+      resultPayload = await deliverWebhookJob(job);
     }
 
     const updatedRes = await pool.query<BackgroundJobRecord>(
@@ -1178,13 +1343,19 @@ export async function evaluateDueSchedules(
 class BackgroundWorkerSupervisor {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private processedJobsTotal = 0;
+  private lastTickAt: string | null = null;
 
   start(): void {
     if (this.timer || !config.WORKER_ENABLED) return;
     this.timer = setInterval(() => {
       if (this.running) return;
       this.running = true;
+      this.lastTickAt = new Date().toISOString();
       void processDueBackgroundJobs({ limit: 5 })
+        .then((jobs) => {
+          this.processedJobsTotal += jobs.length;
+        })
         .catch(() => {})
         .finally(() => {
           this.running = false;
@@ -1202,6 +1373,20 @@ class BackgroundWorkerSupervisor {
 
   isRunning(): boolean {
     return this.timer !== null;
+  }
+
+  getStats(): {
+    running: boolean;
+    busy: boolean;
+    processedJobsTotal: number;
+    lastTickAt: string | null;
+  } {
+    return {
+      running: this.timer !== null,
+      busy: this.running,
+      processedJobsTotal: this.processedJobsTotal,
+      lastTickAt: this.lastTickAt,
+    };
   }
 }
 

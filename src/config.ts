@@ -15,6 +15,7 @@ const schema = z.object({
     .default(defaultNodeEnv),
   HOST: z.string().default("0.0.0.0"),
   PORT: z.coerce.number().int().min(1).max(65535).default(4100),
+  PUBLIC_URL: z.string().optional(),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default(isTestRunner ? "silent" : "info"),
@@ -47,17 +48,7 @@ const schema = z.object({
     .string()
     .min(16)
     .default("maary-base-dev-encryption-master-key-change-in-prod-32b"),
-  APK_SIGNING_PRIVATE_KEY: z.string().optional(),
-  APK_SIGNING_KEY_FILE: z
-    .string()
-    .default(
-      join(
-        process.cwd(),
-        isTestRunner
-          ? "data/test-apk-signing/private-key.pem"
-          : "data/apk-signing/private-key.pem"
-      )
-    ),
+  ANDROID_APK_PATH: z.string().optional(),
   STORAGE_BACKEND: z.enum(["local", "s3"]).default("local"),
   STORAGE_DIR: z
     .string()
@@ -71,6 +62,12 @@ const schema = z.object({
     ),
   MAX_UPLOAD_BYTES: z.coerce.number().int().min(1024).default(52_428_800),
   FUNCTION_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(5_000),
+  WEBHOOK_ALLOW_PRIVATE_NETWORKS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      v === undefined ? false : v === "true" || v === "1"
+    ),
   WORKER_ENABLED: z
     .string()
     .optional()

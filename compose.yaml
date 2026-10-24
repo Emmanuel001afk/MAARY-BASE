@@ -1,6 +1,6 @@
 services:
   database:
-    image: postgres:17-alpine
+    image: postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-maary}
@@ -23,13 +23,13 @@ services:
       database:
         condition: service_healthy
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
+      NODE_ENV: ${NODE_ENV:-production}
       HOST: 0.0.0.0
       PORT: 4100
       DATABASE_URL: postgres://${POSTGRES_USER:-maary}:${POSTGRES_PASSWORD:-change-this-local-password}@database:5432/${POSTGRES_DB:-maary}
-      JWT_SECRET: ${JWT_SECRET:-maary-base-dev-jwt-secret-change-in-production-0123456789}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-maary-base-dev-encryption-master-key-change-in-prod-32b}
-      PLATFORM_BOOTSTRAP_TOKEN: ${PLATFORM_BOOTSTRAP_TOKEN:-maary-base-dev-bootstrap-token-change-in-production-0123456789}
+      JWT_SECRET: ${JWT_SECRET:?Set a unique 32+ char JWT_SECRET in .env}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set a unique 32+ char ENCRYPTION_KEY in .env}
+      PLATFORM_BOOTSTRAP_TOKEN: ${PLATFORM_BOOTSTRAP_TOKEN:?Set a unique 32+ char PLATFORM_BOOTSTRAP_TOKEN in .env}
       TRUST_PROXY: ${TRUST_PROXY:-false}
       STORAGE_DIR: /app/storage
       BACKUP_DIR: /app/data/backups
@@ -40,6 +40,11 @@ services:
     volumes:
       - maary_storage:/app/storage
       - maary_data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4100/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 volumes:
   maary_postgres:
