@@ -116,12 +116,25 @@ jobs:
 
       - name: Compile Android companion APK & run Android Lint via Gradle
         run: |
-          gradle --project-dir android assembleDebug lintDebug --no-daemon --stacktrace
+          if ! gradle --project-dir android assembleDebug lintDebug --no-daemon --stacktrace > /tmp/gradle.log 2>&1; then
+            cat /tmp/gradle.log
+            msg=$(tail -n 25 /tmp/gradle.log | tr '\n' ' ' | cut -c 1-900)
+            echo "::error title=GradleBuildFailed::${msg}"
+            exit 1
+          fi
+          cat /tmp/gradle.log | tail -n 30
           mkdir -p releases
           cp android/app/build/outputs/apk/debug/app-debug.apk releases/marry-base-android.apk
 
       - name: Verify compiled APK structure & Android apksigner signature
-        run: node scripts/verify-apk.mjs releases/marry-base-android.apk --require-apksigner
+        run: |
+          if ! node scripts/verify-apk.mjs releases/marry-base-android.apk --require-apksigner > /tmp/verify.log 2>&1; then
+            cat /tmp/verify.log
+            msg=$(tail -n 20 /tmp/verify.log | tr '\n' ' ' | cut -c 1-900)
+            echo "::error title=VerifyApkFailed::${msg}"
+            exit 1
+          fi
+          cat /tmp/verify.log
 
       - name: Upload MARRY BASE Android APK artifact
         uses: actions/upload-artifact@v4

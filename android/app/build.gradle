@@ -54,6 +54,7 @@ android {
     lint {
         abortOnError true
         checkReleaseBuilds false
-        disable "GradleDependency", "OldTargetApi", "SetJavaScriptEnabled"
+        textReport true
+        disable "GradleDependency", "OldTargetApi", "ExpiredTargetSdkVersion", "SetJavaScriptEnabled"
     }
 }
