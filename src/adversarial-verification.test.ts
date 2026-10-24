@@ -324,6 +324,26 @@ test("Critical #3: Android APK contains compiled binary AXML manifest, ARSC reso
     assert.equal(dex.readUInt32LE(96), 1); // class_defs_size = 1
     assert.ok(dex.includes(Buffer.from("Lcom/marrybase/platform/MainActivity;")));
     assert.ok(dex.includes(Buffer.from("Landroid/webkit/WebView;")));
+    for (const method of [
+      "setJavaScriptEnabled",
+      "setDomStorageEnabled",
+      "setAllowUniversalAccessFromFileURLs",
+      "setWebViewClient",
+      "setWebChromeClient",
+      "onBackPressed",
+      "canGoBack",
+      "goBack",
+    ]) {
+      assert.ok(dex.includes(Buffer.from(method)), `MainActivity DEX must include ${method}`);
+    }
+    const mobileHtml = entries.get("assets/www/index.html")!.data.toString("utf8");
+    const mobileConfig = entries.get("assets/www/config.js")!.data.toString("utf8");
+    assert.match(mobileHtml, /Content-Security-Policy/);
+    assert.match(mobileHtml, /Connect & open Studio|Connect &amp; open Studio/);
+    assert.match(mobileConfig, /__MARRY_BASE_CONFIG__/);
+    assert.ok(entries.has("assets/www/styles.css"));
+    assert.ok(entries.has("assets/www/app.js"));
+    assert.ok(entries.has("assets/www/app-icon.png"));
 
     // 5. Verify META-INF/MARRYBAS.RSA is an ASN.1 DER PKCS#7 SignedData structure (OID 1.2.840.113549.1.7.2)
     const rsa = entries.get("META-INF/MARRYBAS.RSA")!.data;

@@ -1,41 +1,59 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="MARRY BASE Official App Icon">
-  <title>MARRY BASE Official App Icon — Interlocking Union Rings (MARRY) on 3-Tier Isometric Database Pedestal (BASE)</title>
-  <desc>Two interlocking rings (Emerald Green and Radiant Gold) united by a central M monogram representing MARRY (the union of application and backend), resting upon a three-tier hexagonal obsidian-teal pedestal representing BASE (Database, Storage, and Security foundation).</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="title description">
+  <title id="title">MARRY BASE — Connected Backend Platform</title>
+  <desc id="description">An architectural M joined by an infinity link above three secure server layers, representing connected applications on an independent backend foundation.</desc>
   <defs>
-    <linearGradient id="bgSquircle" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#162234" />
-      <stop offset="100%" stop-color="#090e17" />
+    <linearGradient id="background" x1="54" y1="34" x2="458" y2="484" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#21333d"/>
+      <stop offset=".52" stop-color="#14232d"/>
+      <stop offset="1" stop-color="#0b151e"/>
     </linearGradient>
-    <linearGradient id="emeraldRing" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#6ee7b7" />
-      <stop offset="50%" stop-color="#10b981" />
-      <stop offset="100%" stop-color="#047857" />
+    <linearGradient id="emerald" x1="110" y1="115" x2="382" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8bf0c7"/>
+      <stop offset=".48" stop-color="#42d6a2"/>
+      <stop offset="1" stop-color="#179c78"/>
     </linearGradient>
-    <linearGradient id="goldRing" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#fde68a" />
-      <stop offset="50%" stop-color="#f59e0b" />
-      <stop offset="100%" stop-color="#b45309" />
+    <linearGradient id="gold" x1="192" y1="126" x2="320" y2="300" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f3d58c"/>
+      <stop offset="1" stop-color="#c99743"/>
     </linearGradient>
-    <linearGradient id="baseTop" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#1e293b" />
-      <stop offset="100%" stop-color="#0f172a" />
+    <linearGradient id="server" x1="256" y1="318" x2="256" y2="438" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#55d9aa"/>
+      <stop offset="1" stop-color="#208b70"/>
     </linearGradient>
-    <linearGradient id="baseEdge" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#0d9488" />
-      <stop offset="50%" stop-color="#14b8a6" />
-      <stop offset="100%" stop-color="#0f766e" />
-    </linearGradient>
+    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
   </defs>
-  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#bgSquircle)" stroke="#334155" stroke-width="3" />
-  <polygon points="56,192 96,174 160,174 200,192 160,214 96,214" fill="url(#baseTop)" stroke="#2dd4bf" stroke-width="2" />
-  <polygon points="56,192 96,214 160,214 200,192 200,206 160,228 96,228 56,206" fill="url(#baseEdge)" opacity="0.85" />
-  <polygon points="68,174 102,158 154,158 188,174 154,192 102,192" fill="url(#baseTop)" stroke="#2dd4bf" stroke-width="2" />
-  <polygon points="68,174 102,192 154,192 188,174 188,186 154,204 102,204 68,186" fill="url(#baseEdge)" opacity="0.92" />
-  <polygon points="82,156 108,144 148,144 174,156 148,170 108,170" fill="url(#baseTop)" stroke="#5eead4" stroke-width="2.2" />
-  <polygon points="82,156 108,170 148,170 174,156 174,166 148,180 108,180 82,166" fill="url(#baseEdge)" />
-  <circle cx="102" cy="104" r="46" fill="none" stroke="url(#emeraldRing)" stroke-width="14" />
-  <circle cx="154" cy="104" r="46" fill="none" stroke="url(#goldRing)" stroke-width="14" />
-  <path d="M 122 63 A 46 46 0 0 1 148 104" fill="none" stroke="url(#emeraldRing)" stroke-width="14" stroke-linecap="round" />
-  <path d="M 92 140 L 92 86 L 128 118" fill="none" stroke="url(#emeraldRing)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" />
-  <path d="M 128 118 L 164 86 L 164 140" fill="none" stroke="url(#goldRing)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" />
+
+  <rect x="10" y="10" width="492" height="492" rx="116" fill="url(#background)"/>
+  <rect x="18" y="18" width="476" height="476" rx="108" fill="none" stroke="#43606a" stroke-opacity=".38" stroke-width="2"/>
+  <ellipse cx="256" cy="270" rx="168" ry="154" fill="#31c795" opacity=".055"/>
+
+  <!-- Architectural M: two application pillars connected as one platform. -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M124 140h76l56 63 56-63h76" stroke="url(#gold)" stroke-width="10"/>
+    <path d="M139 158h55l62 70 62-70h55M139 299V177m26 122V177M347 299V177m26 122V177" stroke="url(#emerald)" stroke-width="11"/>
+    <path d="M121 315h88m94 0h88" stroke="#37c899" stroke-width="8"/>
+
+    <!-- The connected application link. -->
+    <path d="M256 219c-18 22-46 48-46 73 0 23 19 40 46 40s46-17 46-40c0-25-28-51-46-73Z" stroke="url(#gold)" stroke-width="9"/>
+    <path d="M256 240c-12 16-27 33-27 49 0 13 11 24 27 24s27-11 27-24c0-16-15-33-27-49Z" stroke="url(#emerald)" stroke-width="7"/>
+  </g>
+
+  <!-- Three owned backend layers: database, services, and security. -->
+  <g filter="url(#softGlow)">
+    <path d="m113 345 34-20h218l34 20-34 20H147l-34-20Z" fill="#67dcb1"/>
+    <path d="M113 345v26l34 20h218l34-20v-26l-34 20H147l-34-20Z" fill="url(#server)"/>
+    <path d="m113 376 34-20h218l34 20-34 20H147l-34-20Z" fill="#50cda3"/>
+    <path d="M113 376v26l34 20h218l34-20v-26l-34 20H147l-34-20Z" fill="url(#server)"/>
+    <path d="m113 407 34-20h218l34 20-34 20H147l-34-20Z" fill="#43bd98"/>
+    <path d="M113 407v24l34 20h218l34-20v-24l-34 20H147l-34-20Z" fill="url(#server)"/>
+  </g>
+  <g fill="#d9f8e9" opacity=".9">
+    <circle cx="158" cy="367" r="3"/><circle cx="170" cy="367" r="3"/><circle cx="182" cy="367" r="3"/>
+    <circle cx="158" cy="398" r="3"/><circle cx="170" cy="398" r="3"/><circle cx="182" cy="398" r="3"/>
+    <circle cx="158" cy="429" r="3"/><circle cx="170" cy="429" r="3"/><circle cx="182" cy="429" r="3"/>
+  </g>
+  <path d="M139 355h224" stroke="#d9bd71" stroke-width="3" stroke-linecap="round" opacity=".8"/>
 </svg>

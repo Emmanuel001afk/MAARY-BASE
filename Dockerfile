@@ -4,6 +4,7 @@ COPY package.json package-lock.json* ./
 RUN npm install
 COPY tsconfig.json ./
 COPY assets ./assets
+COPY public ./public
 COPY src ./src
 RUN npm run build
 
@@ -15,6 +16,7 @@ WORKDIR /app
 COPY --from=build /app/package.json ./
 RUN npm install --omit=dev
 COPY --from=build /app/assets ./assets
+COPY --from=build /app/public ./public
 COPY --from=build /app/releases ./releases
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/src/db/migrations ./dist/db/migrations

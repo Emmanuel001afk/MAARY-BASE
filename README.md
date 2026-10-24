@@ -20,8 +20,8 @@
 | **Object Storage** | Operational | Public & private buckets, bucket access policies (`path_prefix`, `allow_owner_only`, role checks), MIME validation, file-size limits, storage quotas, SHA-256 checksums, HMAC signed download/upload URLs, multipart resumable uploads, abandoned upload cleanup. |
 | **Realtime Services** | Operational | Authenticated WebSocket server (`/v1/projects/:ref/realtime/ws`), automatic PostgreSQL row-change capture via `SECURITY DEFINER` triggers (`INSERT`, `UPDATE`, `DELETE`), channel broadcast, presence tracking, reconnection event replay via `lastEventId`. |
 | **Server Functions & Jobs** | Operational | Versioned JS functions executed in a sandboxed `node:vm` runtime with CPU timeouts, console log capture, encrypted secret injection, and project-scoped DB bridge; durable PostgreSQL background job queue with retries, exponential backoff, dead-letter state, idempotency keys, and recurring schedules. |
-| **Management Studio, CLI & SDK** | Operational | Interactive browser dashboard (`/` and `/dashboard`) branded with the official MARRY BASE logo, CLI (`npm run cli -- ...`), and fluent TypeScript SDK (`createMaaryClient`). |
-| **Android APK Builder & Mobile** | Operational | Built-in Android `.apk` packager & RSA v1 JAR signer (`releases/marry-base.apk`), native Android project source (`android/`), CLI builder (`npm run build:apk`), and REST endpoints (`POST /v1/platform/apk/build` requires a platform access token; `GET /v1/platform/apk/download` serves the APK). |
+| **Management Studio, CLI & SDK** | Operational | Responsive browser studio (`/` and `/dashboard`) with dark/light themes, automatic session renewal, safe escaped rendering, complete project workflows, realtime inspection, RBAC, backups, mobile navigation, and keyboard commands; CLI (`npm run cli -- ...`) and fluent TypeScript SDK (`createMaaryClient`). |
+| **Android APK Builder & Mobile** | Operational | Polished mobile connection hub, full in-app Management Studio, back-button navigation, generated per-project configuration, multi-density backend-themed icons, binary AXML/ARSC/DEX packaging, and RSA v1 JAR signing. Build with `npm run build:apk` or `POST /v1/platform/apk/build`; download with `GET /v1/platform/apk/download`. |
 | **Operations & Backups** | Operational | `/health`, `/ready`, `/v1/metrics` (JSON & Prometheus format), logical project/platform backups with SHA-256 integrity verification and transactional restoration. |
 
 ---
@@ -57,6 +57,60 @@ cp .env.example .env
 # and PLATFORM_BOOTSTRAP_TOKEN values in .env (see docs/OPERATIONS.md).
 docker compose up -d --build
 ```
+
+---
+
+## Management Studio
+
+The dependency-free Management Studio is served directly by Fastify and requires no frontend build step. It includes:
+
+- Project diagnostics, environments, launch checklist, SDK snippets, and recent activity.
+- Schema/table management, a row browser, SQL editor with local query history, and native RLS policy controls.
+- Versioned migrations and confirmed rollbacks.
+- End-user administration and authentication policy settings.
+- Bucket/object management, real file or text uploads, and expiring signed downloads.
+- Function deployment and invocation, durable job queues, and recurring schedules.
+- Live WebSocket inspection, broadcasts, channels, and persisted event history.
+- Scoped API keys with one-time credential display, encrypted secrets, and team RBAC.
+- Backup creation/verification/restoration, audit search, OpenAPI export, project settings, and signed Android builds.
+
+Use **Ctrl/Cmd + K** to open the command menu and **Ctrl/Cmd + Enter** in the SQL editor to run a query. Navigation is hash-based, so workspace views can be bookmarked and restored.
+
+Studio source is organized under `public/dashboard/`:
+
+```text
+public/dashboard/
+├── index.html       # Accessible application shell, dialogs, and SVG icon system
+├── styles.css       # Responsive dark/light design system
+├── app.js           # Authentication, routing, shell events, and command menu
+└── js/
+    ├── core.js      # API client, token renewal, state, safe rendering, and UI utilities
+    ├── pages.js     # Workspace templates, data loaders, and table renderers
+    └── actions.js   # Forms, mutations, confirmations, uploads, and realtime actions
+```
+
+---
+
+## Android Mobile Client
+
+The downloadable app opens a local connection hub rather than a static information page. It can:
+
+- Verify a server through `/ready`, show basic runtime status, and remember the last working URL on the device.
+- Open the complete Management Studio inside the app, with WebView history handled by the Android back button.
+- Provide direct health/platform links plus emulator, LAN, HTTPS, and connection troubleshooting guidance.
+- Use a project-specific package, version, server URL, and generated `assets/www/config.js` without interpolating server data into HTML.
+
+Use `http://10.0.2.2:4100` from the Android emulator when MARRY BASE runs on the host computer. Use the host's LAN address for a physical test device, and HTTPS for production. The server URL contains no credentials; operator authentication remains inside the Studio.
+
+```bash
+# Build the default signed APK at releases/marry-base.apk
+npm run build:apk
+
+# Or build a project-specific artifact through the Studio's APK workspace.
+# Its download URL is /v1/platform/apk/download?projectSlug=<slug>.
+```
+
+Project downloads serve the exact artifact produced by the build. They do not rebuild with default settings, and project builds never replace the default `releases/marry-base.apk`. Mobile source lives in `public/mobile/`; the native source shell under `android/` and the generated DEX in `src/services/apk.service.ts` use the same local client and connection behavior.
 
 ---
 
@@ -139,6 +193,10 @@ const channel = await maary.realtime
 ```bash
 # Run TypeScript typechecking
 npm run typecheck
+
+# Validate Management Studio and mobile browser modules
+npm run check:studio
+npm run check:mobile
 
 # Compile production build to dist/
 npm run build

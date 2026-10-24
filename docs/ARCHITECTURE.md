@@ -26,6 +26,25 @@ Unified PostgreSQL Pool & Transaction Layer (src/db/pool.ts)
 PostgreSQL Engine (External PostgreSQL via pg.Pool OR Embedded PostgreSQL via PGlite)
 ```
 
+### Management Studio Boundaries
+
+The browser studio is a static, dependency-free ES-module application under `public/dashboard/`. Fastify serves an explicit allowlist of its HTML, CSS, and JavaScript assets from `src/routes/dashboard.ts`; production Docker images copy the same `public/` directory. There is no frontend framework runtime or client-side build artifact to keep synchronized.
+
+- `app.js` owns operator authentication, project selection, hash routing, global keyboard commands, and shell state.
+- `js/core.js` owns the fetch wrapper, rotating access-token renewal, shared state, escaped rendering, formatting, dialogs, and notifications.
+- `js/pages.js` owns view templates and stale-request-aware data loaders.
+- `js/actions.js` owns mutations, native form workflows, confirmations, uploads, and realtime connections.
+
+All studio API calls remain same-origin and use the existing control-plane authorization boundaries. Dynamic API values are escaped before HTML insertion, credentials are not revealed in ordinary key lists, and destructive operations require explicit confirmation. The Content Security Policy continues to permit scripts only from the same origin.
+
+### Android Client & APK Artifact Boundaries
+
+The mobile hub is a separate static client under `public/mobile/`. Its CSP permits local scripts/styles and HTTP(S) readiness requests but no inline script. `config.js` is generated as escaped JSON data for each APK; the HTML remains configuration-independent. The hub stores only the last working server URL in WebView local storage, then hands authentication and project workflows to the full Management Studio.
+
+`src/services/apk.service.ts` compiles binary Android XML/resources and the actual `MainActivity` DEX. The activity enables JavaScript, DOM storage, trusted local-client network access, WebView/Chrome clients, and WebView history navigation. This generated DEX—not only the readable Gradle source under `android/`—is what the downloadable APK executes. Android backups are disabled so WebView authentication storage is not exported through OS backup.
+
+Default and project APKs have distinct artifact lifecycles. A project build writes only `releases/marry-base-<slug>.apk`; subsequent `GET /v1/platform/apk/download?projectSlug=<slug>` requests read that exact signed file. Missing artifacts return 404 instead of silently rebuilding with default configuration. Slugs, server URLs, version names, and version codes are validated before packaging.
+
 ---
 
 ## 2. Multi-Project Isolation & PostgreSQL Row-Level Security

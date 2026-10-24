@@ -9,7 +9,9 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json && npm run build:apk",
+    "check:studio": "node --check public/dashboard/app.js && node --check public/dashboard/js/core.js && node --check public/dashboard/js/pages.js && node --check public/dashboard/js/actions.js",
+    "check:mobile": "node --check public/mobile/app.js && node --check public/mobile/config.js",
+    "build": "npm run check:studio && npm run check:mobile && tsc -p tsconfig.json && npm run build:apk",
     "build:apk": "tsx src/cli/index.ts apk build",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
