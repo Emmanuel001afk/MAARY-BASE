@@ -1,11 +1,12 @@
 import {
   $, api, closeDialog, confirmAction, copyText, debounce,
-  downloadText, esc, formatDate, openDialog, parseJson, projectApi, reportError,
+  downloadCsv, downloadText, esc, formatDate, openDialog, parseJson, projectApi, reportError,
   showCredentials, showToast, state, storageAdapter,
 } from "./core.js";
 import {
-  appendRealtimeLog, browseTable, loadPage, openBucket, renderSqlResult,
-  renderTablesList, renderVisualColumnsBuilder, updateRealtimeUi,
+  appendRealtimeLog, browseTable, buildColumnFormFields, collectColumnFormPayload,
+  loadPage, openBucket, renderSavedQueries, renderSqlResult,
+  renderTablesList, renderVisualColumnsBuilder, updateRealtimeUi, updateSavedQueryLabel,
 } from "./pages.js";
 
 function encodePath(path) {
@@ -51,6 +52,65 @@ export function renderSqlHistory() {
   if (!select) return;
   const history = readSqlHistory();
   select.innerHTML = `<option value="">Recent queries…</option>${history.map((sql, index) => `<option value="${index}">${esc(sql.replace(/\s+/g, " ").slice(0, 72))}</option>`).join("")}`;
+}
+
+function readCollapsedNavSections() {
+  try {
+    const saved = JSON.parse(storageAdapter.get("maary_nav_sections") || "[]");
+    return Array.isArray(saved) ? saved : [];
+  } catch { return []; }
+}
+
+export function applyNavSectionState() {
+  const collapsed = new Set(readCollapsedNavSections());
+  document.querySelectorAll(".nav-section[data-nav-section]").forEach((section) => {
+    const isCollapsed = collapsed.has(section.dataset.navSection);
+    section.classList.toggle("collapsed", isCollapsed);
+    section.querySelector(".nav-section-head")?.setAttribute("aria-expanded", String(!isCollapsed));
+  });
+}
+
+function toggleNavSection(button) {
+  const section = button.closest(".nav-section[data-nav-section]");
+  if (!section) return;
+  const key = section.dataset.navSection;
+  const collapsed = new Set(readCollapsedNavSections());
+  if (collapsed.has(key)) collapsed.delete(key);
+  else collapsed.add(key);
+  storageAdapter.set("maary_nav_sections", JSON.stringify([...collapsed]));
+  applyNavSectionState();
+}
+
+function activeTableInfo() {
+  return state.tables.find((item) => item.name === state.activeTable) || null;
+}
+
+function openInsertRowDialog() {
+  const tableInfo = activeTableInfo();
+  if (!tableInfo) throw new Error("Select a table before inserting a row.");
+  $("insert-row-subtitle").textContent = `${state.activeProject?.name || "Project"} · ${tableInfo.name}`;
+  $("insert-row-columns").innerHTML = buildColumnFormFields(tableInfo.columns, null, "ins-col");
+  openDialog("insert-row-dialog");
+  window.setTimeout(() => $("insert-row-columns").querySelector("input, select, textarea")?.focus(), 30);
+}
+
+function openSaveQueryDialog(existing = null) {
+  const editor = $("sql-editor-input");
+  $("save-query-id").value = existing?.id || "";
+  $("save-query-name").value = existing?.name || "";
+  $("save-query-description").value = existing?.description || "";
+  $("save-query-favorite").checked = Boolean(existing?.favorite);
+  $("save-query-sql").value = existing?.sql || editor?.value || "";
+  $("save-query-title").textContent = existing ? "Update saved query" : "Save query";
+  openDialog("save-query-dialog");
+  window.setTimeout(() => $("save-query-name").focus(), 30);
+}
+
+async function refreshSavedQueries() {
+  const response = await api(projectApi("/database/queries"));
+  state.savedQueries = response.queries || [];
+  renderSavedQueries();
+  updateSavedQueryLabel();
 }
 
 async function resolveProjectKeyByRole(role = "anon") {
@@ -143,10 +203,23 @@ export async function handleAction(action, element) {
       await copyText($("credential-value").textContent || "");
       break;
     case "focus-create-table": focusElement("tbl-name", "create-table-disclosure"); break;
-    case "focus-create-bucket": focusElement("bucket-name", "create-bucket-disclosure"); break;
+    case "focus-create-bucket": activateLocalTab("storage-buckets"); focusElement("bucket-name", "create-bucket-disclosure"); break;
     case "focus-deploy-function": activateLocalTab("functions"); focusElement("fn-slug"); break;
     case "focus-create-key": activateLocalTab("keys"); focusElement("key-name"); break;
     case "create-backup-focus": activateLocalTab("backups-main"); focusElement("backup-name-input"); break;
+    case "toggle-nav-section": toggleNavSection(element); break;
+    case "open-insert-row": openInsertRowDialog(); break;
+    case "copy-row-json": {
+      const row = state.rowBrowser.rows[Number(element.dataset.idx)];
+      if (row) await copyText(JSON.stringify(row, null, 2), "Row copied as JSON");
+      break;
+    }
+    case "export-rows-csv": {
+      if (!state.rowBrowser.rows.length) throw new Error("There are no loaded rows to export.");
+      downloadCsv(`${state.activeTable || "rows"}-offset-${state.rowBrowser.offset}.csv`, state.rowBrowser.rows);
+      showToast(`${state.rowBrowser.rows.length} row(s) exported as CSV.`, "success", "Export ready");
+      break;
+    }
 
     // Organizations
     case "select-org-detail":
@@ -228,10 +301,17 @@ export async function handleAction(action, element) {
       $("edit-row-pk-col").value = pkCol;
       $("edit-row-pk-val").value = String(row[pkCol]);
       $("edit-row-subtitle").textContent = `${state.activeTable} · ${pkCol} = ${row[pkCol]}`;
+      const tableInfo = activeTableInfo();
+      const editableColumns = (tableInfo?.columns || []).filter((col) => col.name !== pkCol);
+      $("edit-row-columns").innerHTML = editableColumns.length
+        ? buildColumnFormFields(editableColumns, row, "edit-col")
+        : `<p class="subtle">No column metadata available — edit the raw JSON payload below.</p>`;
       const editable = { ...row };
       delete editable[pkCol];
-      $("edit-row-json").value = JSON.stringify(editable, null, 2);
+      $("edit-row-json").value = "";
+      $("edit-row-json").placeholder = JSON.stringify(editable, null, 2);
       openDialog("edit-row-dialog");
+      window.setTimeout(() => $("edit-row-columns").querySelector("input, select, textarea")?.focus(), 30);
       break;
     }
     case "delete-row": {
@@ -284,11 +364,66 @@ export async function handleAction(action, element) {
       break;
     }
 
-    // SQL, Policies & API Explorer
+    // SQL, Saved Queries, Policies & API Explorer
     case "clear-sql":
       $("sql-editor-input").value = "";
       $("sql-result-box").innerHTML = "";
+      state.lastSqlResult = null;
+      state.activeSavedQueryId = null;
+      updateSavedQueryLabel();
+      renderSavedQueries();
       $("sql-editor-input").focus();
+      break;
+    case "sql-snippet":
+      $("sql-editor-input").value = element.dataset.sql || "";
+      state.activeSavedQueryId = null;
+      updateSavedQueryLabel();
+      focusElement("sql-editor-input");
+      break;
+    case "open-save-query": {
+      const existing = state.savedQueries.find((query) => query.id === state.activeSavedQueryId) || null;
+      openSaveQueryDialog(existing);
+      break;
+    }
+    case "load-saved-query": {
+      const query = state.savedQueries.find((item) => item.id === element.dataset.id);
+      if (!query) return;
+      $("sql-editor-input").value = query.sql;
+      state.activeSavedQueryId = query.id;
+      updateSavedQueryLabel();
+      renderSavedQueries();
+      focusElement("sql-editor-input");
+      showToast(`Loaded saved query "${query.name}".`, "info", "SQL library");
+      break;
+    }
+    case "edit-saved-query": {
+      const query = state.savedQueries.find((item) => item.id === element.dataset.id);
+      if (query) openSaveQueryDialog(query);
+      break;
+    }
+    case "delete-saved-query": {
+      const confirmed = await confirmAction({
+        title: `Delete saved query ${element.dataset.name}?`,
+        message: "Removes this query from the project's shared SQL library.",
+        confirmLabel: "Delete query",
+      });
+      if (!confirmed) return;
+      await api(projectApi(`/database/queries/${encodeURIComponent(element.dataset.id)}`), { method: "DELETE" });
+      if (state.activeSavedQueryId === element.dataset.id) {
+        state.activeSavedQueryId = null;
+        updateSavedQueryLabel();
+      }
+      showToast("Saved query deleted.");
+      await refreshSavedQueries();
+      break;
+    }
+    case "copy-sql-result":
+      if (state.lastSqlResult) await copyText(JSON.stringify(state.lastSqlResult.rows || [], null, 2), "Result rows copied as JSON");
+      break;
+    case "export-sql-csv":
+      if (!state.lastSqlResult?.rows?.length) throw new Error("Run a query with results first.");
+      downloadCsv(`sql-result-${Date.now()}.csv`, state.lastSqlResult.rows);
+      showToast("Query result exported as CSV.", "success", "Export ready");
       break;
     case "delete-policy": {
       const { table: tableName, policy } = element.dataset;
@@ -309,6 +444,7 @@ export async function handleAction(action, element) {
       break;
     }
     case "prefill-api-test":
+      activateLocalTab("api-explorer");
       $("api-test-method").value = element.dataset.method || "GET";
       $("api-test-path").value = element.dataset.path || "/rest/";
       focusElement("api-test-path");
@@ -629,7 +765,11 @@ const submitHandlers = {
   "edit-row-form": async () => {
     const pkCol = $("edit-row-pk-col").value;
     const pkVal = $("edit-row-pk-val").value;
-    const payload = parseJson($("edit-row-json").value, "Row JSON");
+    const rawJson = $("edit-row-json").value.trim();
+    const payload = rawJson
+      ? parseJson(rawJson, "Row JSON")
+      : collectColumnFormPayload($("edit-row-columns"));
+    if (!Object.keys(payload).length) throw new Error("Change at least one column value, or provide a JSON payload.");
     await api(projectApi(`/rest/${encodeURIComponent(state.activeTable)}?${encodeURIComponent(pkCol)}=eq.${encodeURIComponent(pkVal)}`), {
       method: "PATCH",
       body: payload,
@@ -668,6 +808,52 @@ const submitHandlers = {
     showToast("Column renamed.");
     await loadPage("database");
   },
+  "alter-rename-table-form": async () => {
+    if (!state.activeTable) throw new Error("Select a table first.");
+    const toName = $("alt-table-to").value.trim();
+    const confirmed = await confirmAction({
+      title: `Rename ${state.activeTable} to ${toName}?`,
+      message: "Rows, indexes, and RLS policies move with the table. REST endpoints immediately switch to the new name.",
+      confirmLabel: "Rename table",
+      danger: false,
+    });
+    if (!confirmed) return;
+    await api(projectApi(`/database/tables/${encodeURIComponent(state.activeTable)}`), {
+      method: "PATCH",
+      body: { action: "rename_table", toName },
+    });
+    state.activeTable = toName;
+    showToast(`Table renamed to ${toName}.`);
+    await loadPage("database");
+  },
+  "alter-column-form": async () => {
+    if (!state.activeTable) throw new Error("Select a table first.");
+    const columnName = $("alt2-col-name").value;
+    if (!columnName) throw new Error("Choose the column to alter.");
+    const type = $("alt2-col-type").value;
+    const nullable = $("alt2-col-nullable").value;
+    const defaultValue = $("alt2-col-default").value.trim();
+    const dropDefault = $("alt2-col-drop-default").checked;
+    if (!type && !defaultValue && !dropDefault && nullable === "") {
+      throw new Error("Pick at least one change: type, default, nullability, or drop-default.");
+    }
+    if (defaultValue && dropDefault) throw new Error("Set a new default or drop it — not both.");
+    await api(projectApi(`/database/tables/${encodeURIComponent(state.activeTable)}`), {
+      method: "PATCH",
+      body: {
+        action: "alter_column",
+        columnName,
+        ...(type ? { type } : {}),
+        ...(defaultValue ? { defaultValue } : {}),
+        ...(dropDefault ? { dropDefault: true } : {}),
+        ...(nullable !== "" ? { notNull: nullable === "true" } : {}),
+      },
+      timeout: 60_000,
+    });
+    $("alter-column-form").reset();
+    showToast(`Column ${columnName} altered.`);
+    await loadPage("database");
+  },
   "alter-create-index-form": async () => {
     if (!state.activeTable) throw new Error("Select a table first.");
     const cols = $("alt-idx-cols").value.split(",").map((c) => c.trim()).filter(Boolean);
@@ -687,15 +873,59 @@ const submitHandlers = {
     try {
       const result = await api(projectApi("/database/sql"), {
         method: "POST",
-        body: { sql, allowDestructive: $("sql-destructive").value === "true", impersonate: role === "service_role" ? undefined : { role, userId: userId || undefined } },
+        body: {
+          sql,
+          allowDestructive: $("sql-destructive").value === "true",
+          savedQueryId: state.activeSavedQueryId || undefined,
+          impersonate: role === "service_role" ? undefined : { role, userId: userId || undefined },
+        },
         timeout: 60_000,
       });
       renderSqlResult(result);
       rememberSql(sql);
+      if (state.activeSavedQueryId) {
+        const active = state.savedQueries.find((query) => query.id === state.activeSavedQueryId);
+        if (active) {
+          active.run_count = Number(active.run_count || 0) + 1;
+          active.last_run_at = new Date().toISOString();
+          renderSavedQueries();
+        }
+      }
     } catch (error) {
+      state.lastSqlResult = null;
       $("sql-result-box").innerHTML = `<div class="notice danger"><svg class="icon"><use href="#i-alert"></use></svg><p>${esc(error.message)}</p></div>`;
       throw error;
     }
+  },
+  "insert-row-dialog-form": async () => {
+    if (!state.activeTable) throw new Error("Select a table before inserting a row.");
+    const payload = collectColumnFormPayload($("insert-row-columns"));
+    if (!Object.keys(payload).length) throw new Error("Fill in at least one column value.");
+    await api(projectApi(`/rest/${encodeURIComponent(state.activeTable)}`), { method: "POST", body: payload });
+    closeDialog("insert-row-dialog");
+    showToast(`Row inserted into ${state.activeTable}.`);
+    await loadPage("database");
+  },
+  "save-query-form": async () => {
+    const existingId = $("save-query-id").value;
+    const body = {
+      name: $("save-query-name").value.trim(),
+      description: $("save-query-description").value.trim(),
+      sql: $("save-query-sql").value,
+      favorite: $("save-query-favorite").checked,
+    };
+    if (!body.name || !body.sql.trim()) throw new Error("A query name and SQL body are required.");
+    if (existingId) {
+      await api(projectApi(`/database/queries/${encodeURIComponent(existingId)}`), { method: "PATCH", body });
+      showToast(`Saved query "${body.name}" updated.`);
+    } else {
+      const result = await api(projectApi("/database/queries"), { method: "POST", body });
+      state.activeSavedQueryId = result.query.id;
+      showToast(`Saved query "${body.name}" stored for this project.`);
+    }
+    closeDialog("save-query-dialog");
+    $("save-query-form").reset();
+    await refreshSavedQueries();
   },
   "create-policy-form": async () => {
     await api(projectApi("/database/policies"), {

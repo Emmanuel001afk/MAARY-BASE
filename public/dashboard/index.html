@@ -52,6 +52,10 @@
       <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14.5 14.5 0 0 1 0 18 14.5 14.5 0 0 1 0-18Z"/></symbol>
       <symbol id="i-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
       <symbol id="i-book" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></symbol>
+      <symbol id="i-save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h12v17l-6-4.2-6 4.2v-17Z"/></symbol>
+      <symbol id="i-star" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.7l5.9-.8L12 3.5Z"/></symbol>
+      <symbol id="i-columns" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15M15 4.5v15"/></symbol>
     </defs>
   </svg>
 
@@ -221,8 +225,12 @@
 
       <aside id="sidebar" class="sidebar" aria-label="Workspace navigation">
         <div class="sidebar-scroll">
-          <div class="nav-section">
-            <span class="nav-section-label">Workspace</span>
+          <div class="nav-section" data-nav-section="workspace">
+            <button class="nav-section-head" type="button" data-action="toggle-nav-section" aria-expanded="true">
+              <span class="nav-section-label">Workspace</span>
+              <svg class="icon nav-chevron"><use href="#i-chevron"></use></svg>
+            </button>
+            <div class="nav-section-items">
             <button class="nav-item active" type="button" data-tab="overview">
               <svg class="icon"><use href="#i-home"></use></svg>
               <span>Overview</span>
@@ -231,10 +239,15 @@
               <svg class="icon"><use href="#i-users"></use></svg>
               <span>Workspaces &amp; Org</span>
             </button>
+            </div>
           </div>
 
-          <div class="nav-section">
-            <span class="nav-section-label">Build</span>
+          <div class="nav-section" data-nav-section="build">
+            <button class="nav-section-head" type="button" data-action="toggle-nav-section" aria-expanded="true">
+              <span class="nav-section-label">Build</span>
+              <svg class="icon nav-chevron"><use href="#i-chevron"></use></svg>
+            </button>
+            <div class="nav-section-items">
             <button class="nav-item" type="button" data-tab="database">
               <svg class="icon"><use href="#i-database"></use></svg>
               <span>Table Editor</span>
@@ -268,10 +281,15 @@
               <svg class="icon"><use href="#i-function"></use></svg>
               <span>Functions &amp; Jobs</span>
             </button>
+            </div>
           </div>
 
-          <div class="nav-section">
-            <span class="nav-section-label">Operate &amp; Admin</span>
+          <div class="nav-section" data-nav-section="operate">
+            <button class="nav-section-head" type="button" data-action="toggle-nav-section" aria-expanded="true">
+              <span class="nav-section-label">Operate &amp; Admin</span>
+              <svg class="icon nav-chevron"><use href="#i-chevron"></use></svg>
+            </button>
+            <div class="nav-section-items">
             <button class="nav-item" type="button" data-tab="logs">
               <svg class="icon"><use href="#i-activity"></use></svg>
               <span>Logs &amp; Monitoring</span>
@@ -292,6 +310,7 @@
               <svg class="icon"><use href="#i-book"></use></svg>
               <span>SDK, CLI &amp; Docs</span>
             </button>
+            </div>
           </div>
         </div>
 
@@ -331,7 +350,7 @@
         <div id="page-root" class="page-root" aria-live="polite"></div>
 
         <footer class="workspace-footer">
-          <span><strong>MARI BASE</strong> Management Studio · v1.1</span>
+          <span><strong>MARI BASE</strong> Management Studio · v1.2</span>
           <span id="footer-runtime-summary">Self-hostable PostgreSQL backend platform</span>
         </footer>
       </main>
@@ -431,7 +450,7 @@
         <div>
           <p class="eyebrow" id="edit-row-subtitle">Row Editor</p>
           <h2 id="edit-row-title">Edit table row</h2>
-          <p>Update column values as JSON and apply via the generated project REST endpoint.</p>
+          <p>Update column values and apply via the generated project REST endpoint.</p>
         </div>
         <button class="icon-btn" type="button" data-close-dialog="edit-row-dialog" aria-label="Close dialog">
           <svg class="icon"><use href="#i-close"></use></svg>
@@ -440,14 +459,79 @@
       <div class="dialog-body">
         <input id="edit-row-pk-col" type="hidden">
         <input id="edit-row-pk-val" type="hidden">
-        <div class="field">
-          <label for="edit-row-json">Row JSON payload</label>
-          <textarea id="edit-row-json" class="code-input" rows="9" required></textarea>
-        </div>
+        <div id="edit-row-columns" class="column-form-grid"></div>
+        <p class="field-help">Empty fields are left unchanged. To set a column to NULL, use the raw JSON payload below.</p>
+        <details class="disclosure">
+          <summary><span><svg class="icon"><use href="#i-terminal"></use></svg> Advanced: raw JSON payload</span><span class="subtle">Optional</span></summary>
+          <div class="disclosure-body">
+            <div class="field">
+              <label for="edit-row-json">Row JSON payload</label>
+              <textarea id="edit-row-json" class="code-input" rows="8"></textarea>
+              <span class="field-help">When filled in, this JSON replaces the per-column values above.</span>
+            </div>
+          </div>
+        </details>
       </div>
       <div class="dialog-footer">
         <button class="btn btn-ghost" type="button" data-close-dialog="edit-row-dialog">Cancel</button>
         <button class="btn btn-primary" type="submit">Save row changes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="insert-row-dialog" class="modal" aria-labelledby="insert-row-title">
+    <form id="insert-row-dialog-form" class="modal-card" method="dialog">
+      <div class="dialog-header">
+        <div>
+          <p class="eyebrow" id="insert-row-subtitle">Row Insert</p>
+          <h2 id="insert-row-title">Insert row</h2>
+          <p>Fill in column values — empty fields are omitted so defaults and NULLs apply.</p>
+        </div>
+        <button class="icon-btn" type="button" data-close-dialog="insert-row-dialog" aria-label="Close dialog">
+          <svg class="icon"><use href="#i-close"></use></svg>
+        </button>
+      </div>
+      <div class="dialog-body">
+        <div id="insert-row-columns" class="column-form-grid"></div>
+      </div>
+      <div class="dialog-footer">
+        <button class="btn btn-ghost" type="button" data-close-dialog="insert-row-dialog">Cancel</button>
+        <button class="btn btn-primary" type="submit">Insert row</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="save-query-dialog" class="modal modal-narrow" aria-labelledby="save-query-title">
+    <form id="save-query-form" class="modal-card" method="dialog">
+      <div class="dialog-header">
+        <div>
+          <p class="eyebrow">SQL Library</p>
+          <h2 id="save-query-title">Save query</h2>
+          <p>Stored server-side in this project — visible to every teammate with access.</p>
+        </div>
+        <button class="icon-btn" type="button" data-close-dialog="save-query-dialog" aria-label="Close dialog">
+          <svg class="icon"><use href="#i-close"></use></svg>
+        </button>
+      </div>
+      <div class="dialog-body">
+        <input id="save-query-id" type="hidden">
+        <div class="field">
+          <label for="save-query-name">Query name</label>
+          <input id="save-query-name" class="mono" type="text" placeholder="active-users-report" required>
+        </div>
+        <div class="field">
+          <label for="save-query-description">Description (optional)</label>
+          <input id="save-query-description" type="text" placeholder="Weekly engagement metrics">
+        </div>
+        <div class="field">
+          <label for="save-query-sql">SQL</label>
+          <textarea id="save-query-sql" class="code-input" rows="6" required></textarea>
+        </div>
+        <label class="checkbox-field"><input id="save-query-favorite" type="checkbox"><span>Pin as favorite</span></label>
+      </div>
+      <div class="dialog-footer">
+        <button class="btn btn-ghost" type="button" data-close-dialog="save-query-dialog">Cancel</button>
+        <button class="btn btn-primary" type="submit">Save query</button>
       </div>
     </form>
   </dialog>

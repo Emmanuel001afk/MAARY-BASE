@@ -21,7 +21,7 @@ export const PAGE_META = {
   },
   sql: {
     group: "Build", title: "SQL Editor & Row-Level Security", icon: "terminal",
-    description: "Run scoped PostgreSQL queries, simulate client roles and auth.uid(), and author RLS policies.",
+    description: "Run scoped PostgreSQL queries, build a shared saved-query library, simulate client roles and auth.uid(), and author RLS policies.",
     actions: `<button class="btn btn-secondary btn-sm" type="button" data-nav="migrations">${icon("layers")}<span>Migrations</span></button>`,
   },
   migrations: {
@@ -85,7 +85,7 @@ export const COMMAND_ITEMS = [
   { group: "Workspace", label: "Project Overview", detail: "Health probes, connection URLs, environments", icon: "home", tab: "overview", shortcut: "G O" },
   { group: "Workspace", label: "Workspaces & Organizations", detail: "Multi-project teams & RBAC", icon: "users", tab: "organizations", shortcut: "G W" },
   { group: "Build", label: "Table Editor", detail: "Visual columns, alter schema, row browser", icon: "database", tab: "database", shortcut: "G D" },
-  { group: "Build", label: "SQL & RLS Policies", detail: "Query runner & Row-Level Security", icon: "terminal", tab: "sql", shortcut: "G S" },
+  { group: "Build", label: "SQL & RLS Policies", detail: "Query runner, saved-query library & Row-Level Security", icon: "terminal", tab: "sql", shortcut: "G S" },
   { group: "Build", label: "Schema Migrations", detail: "Checksummed up/down migrations", icon: "layers", tab: "migrations", shortcut: "G M" },
   { group: "Build", label: "API & Live Explorer", detail: "Interactive REST/RPC tester & OpenAPI", icon: "globe", tab: "api", shortcut: "G P" },
   { group: "Build", label: "Authentication & Users", detail: "Users, sessions, OAuth, recovery", icon: "lock", tab: "auth", shortcut: "G A" },
@@ -131,8 +131,18 @@ export function errorState(error, retryAction = "refresh-page") {
   return `<div class="error-box" role="alert"><div class="error-box-icon">${icon("alert")}</div><div><h3>Couldn’t load this section</h3><p>${esc(error?.message || "Check server connectivity and your permissions.")}</p></div><button class="btn btn-secondary btn-sm" type="button" data-action="${esc(retryAction)}">${icon("refresh")}<span>Retry</span></button></div>`;
 }
 
-export function table(headers, rowsHtml) {
-  return `<div class="table-wrap"><table class="data-table"><thead><tr>${headers.map((header) => `<th scope="col">${esc(header)}</th>`).join("")}</tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
+export function table(headers, rowsHtml, options = {}) {
+  const wrapClass = options.scroll ? "table-wrap grid-scroll" : "table-wrap";
+  const headHtml = headers
+    .map((header) => {
+      if (header && typeof header === "object") {
+        const sub = header.sub ? `<span class="col-type">${esc(header.sub)}</span>` : "";
+        return `<th scope="col">${esc(header.label)}${sub}</th>`;
+      }
+      return `<th scope="col">${esc(header)}</th>`;
+    })
+    .join("");
+  return `<div class="${wrapClass}"><table class="data-table"><thead><tr>${headHtml}</tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
 }
 
 function formatCell(value) {
@@ -250,7 +260,11 @@ const templates = {
         <section class="card">
           <header class="card-header">
             <div class="card-title"><span class="card-title-icon">${icon("file")}</span><div><h2>Data Browser <span id="active-table-label" class="mono subtle"></span></h2><p id="active-table-details">Select a table to filter, sort, insert, edit, or delete rows.</p></div></div>
-            <div class="card-header-actions"><button class="btn btn-secondary btn-sm" type="button" data-action="refresh-rows">${icon("refresh")}<span>Reload</span></button></div>
+            <div class="card-header-actions">
+              <button class="btn btn-secondary btn-sm" type="button" data-action="export-rows-csv">${icon("download")}<span>CSV</span></button>
+              <button class="btn btn-secondary btn-sm" type="button" data-action="refresh-rows">${icon("refresh")}<span>Reload</span></button>
+              <button class="btn btn-primary btn-sm" type="button" data-action="open-insert-row">${icon("plus")}<span>Insert row</span></button>
+            </div>
           </header>
           <form id="row-filter-form" class="toolbar-inline">
             <div class="field"><label for="row-filter-input">Filter (e.g. <span class="mono">status=eq.active</span>)</label><input id="row-filter-input" class="mono" type="text" placeholder="column=eq.value"></div>
@@ -269,19 +283,30 @@ const templates = {
             </div>
           </div>
           <div class="card-divider-form">
-            <form id="insert-row-form" class="stack-form">
-              <div class="label-row"><label for="row-json-input">Insert JSON row</label><span class="field-hint">Single JSON object</span></div>
-              <div class="inline-code-submit">
-                <textarea id="row-json-input" class="code-input" rows="2" placeholder='{"title": "Launch MARRY BASE", "completed": false}' required></textarea>
-                <button class="btn btn-primary" type="submit">Insert row</button>
+            <details class="disclosure">
+              <summary><span>${icon("terminal")} Advanced: insert raw JSON row</span><span class="subtle">Single object</span></summary>
+              <div class="disclosure-body">
+                <form id="insert-row-form" class="stack-form">
+                  <div class="label-row"><label for="row-json-input">Row JSON payload</label><span class="field-hint">POST to the generated REST endpoint</span></div>
+                  <div class="inline-code-submit">
+                    <textarea id="row-json-input" class="code-input" rows="2" placeholder='{"title": "Launch MARRY BASE", "completed": false}' required></textarea>
+                    <button class="btn btn-primary" type="submit">Insert row</button>
+                  </div>
+                </form>
               </div>
-            </form>
+            </details>
           </div>
         </section>
 
         <div class="grid-2">
           ${card("Table Schema, Indexes & Relationships", `<div id="table-schema-inspector">${emptyState("database", "No table selected", "Select a table to inspect columns, primary/foreign keys, and indexes.")}</div>`, { subtitle: "Live catalog metadata from PostgreSQL.", iconName: "layers", flush: true })}
-          ${card("Alter Table & Indexes", `<div class="stack-form">
+          ${card("Alter Table, Columns & Indexes", `<div class="stack-form">
+            <form id="alter-rename-table-form" class="inline-form">
+              <span class="field-hint" style="flex-basis:100%"><strong>Rename table</strong> <span id="alt-table-current" class="mono subtle"></span></span>
+              <input id="alt-table-to" class="mono" type="text" placeholder="new_table_name" required>
+              <button class="btn btn-secondary btn-sm" type="submit">Rename table</button>
+            </form>
+            <div class="divider"></div>
             <form id="alter-add-col-form" class="stack-form">
               <span class="field-hint"><strong>Add column</strong> (with optional FK reference)</span>
               <div class="field-row three">
@@ -296,10 +321,24 @@ const templates = {
               </div>
             </form>
             <div class="divider"></div>
+            <form id="alter-column-form" class="stack-form">
+              <span class="field-hint"><strong>Alter column</strong> (type, default &amp; nullability)</span>
+              <div class="field-row three">
+                <select id="alt2-col-name" aria-label="Column to alter"><option value="">Select column…</option></select>
+                <select id="alt2-col-type" aria-label="New type"><option value="">Keep type</option><option value="text">text</option><option value="uuid">uuid</option><option value="integer">integer</option><option value="bigint">bigint</option><option value="boolean">boolean</option><option value="numeric">numeric</option><option value="jsonb">jsonb</option><option value="timestamptz">timestamptz</option><option value="date">date</option></select>
+                <select id="alt2-col-nullable" aria-label="Nullability"><option value="">Keep nullability</option><option value="true">Require NOT NULL</option><option value="false">Allow NULL</option></select>
+              </div>
+              <div class="field-row three">
+                <input id="alt2-col-default" class="mono" type="text" placeholder="new default (opt)">
+                <label class="checkbox-field"><input id="alt2-col-drop-default" type="checkbox"><span>Drop default</span></label>
+                <button class="btn btn-secondary btn-sm" type="submit">Alter column</button>
+              </div>
+            </form>
+            <div class="divider"></div>
             <form id="alter-rename-col-form" class="inline-form">
               <input id="alt-rename-from" class="mono" type="text" placeholder="old_column" required>
               <input id="alt-rename-to" class="mono" type="text" placeholder="new_column" required>
-              <button class="btn btn-secondary btn-sm" type="submit">Rename</button>
+              <button class="btn btn-secondary btn-sm" type="submit">Rename column</button>
             </form>
             <div class="divider"></div>
             <form id="alter-create-index-form" class="inline-form">
@@ -316,36 +355,52 @@ const templates = {
     </div>`,
 
   sql: () => `${pageHeader("sql")}
-    <div class="stack">
-      <section class="card">
-        <header class="card-header">
-          <div class="card-title"><span class="card-title-icon">${icon("terminal")}</span><div><h2>SQL Workbench</h2><p>Scoped to <code class="mono">${esc(state.activeProject.schema_name)}</code> with statement timeouts and destructive-query safeguards.</p></div></div>
-          <div class="card-header-actions"><select id="sql-history" class="compact-select" aria-label="Recent SQL queries"><option value="">Recent queries…</option></select></div>
-        </header>
-        <form id="sql-form" class="card-body stack-form">
-          <div class="editor-options">
-            <div class="field"><label for="sql-role-select">Execution role</label><select id="sql-role-select"><option value="service_role">service_role (owner — bypasses RLS)</option><option value="authenticated">authenticated (enforces RLS)</option><option value="anon">anon (enforces RLS)</option></select></div>
-            <div class="field"><label for="sql-user-id">Simulated auth.uid()</label><input id="sql-user-id" class="mono" type="text" placeholder="Optional UUID for RLS testing"></div>
-            <div class="field"><label for="sql-destructive">Destructive DDL</label><select id="sql-destructive"><option value="false">Block DROP / TRUNCATE</option><option value="true">Allow destructive SQL</option></select></div>
-          </div>
-          <div class="field"><label for="sql-editor-input">SQL query</label><textarea id="sql-editor-input" class="code-input code-lg" rows="7" spellcheck="false">SELECT current_schema() AS project_schema, current_user AS db_role, now() AS executed_at;</textarea></div>
-          <div class="editor-footer">
-            <span class="subtle">Press <kbd>⌘</kbd> + <kbd>Enter</kbd> to run</span>
-            <div class="button-row"><button class="btn btn-ghost btn-sm" type="button" data-action="clear-sql">Clear</button><button class="btn btn-primary" type="submit">${icon("play")}<span>Run query</span></button></div>
-          </div>
-        </form>
-        <div id="sql-result-box" class="sql-results"></div>
-      </section>
-      <div class="grid-2">
-        ${card("Create RLS Policy", `<form id="create-policy-form" class="stack-form">
-          <div class="field-row"><div class="field"><label for="pol-table">Target table</label><select id="pol-table" required></select></div><div class="field"><label for="pol-cmd">Command</label><select id="pol-cmd"><option value="ALL">ALL</option><option value="SELECT">SELECT</option><option value="INSERT">INSERT</option><option value="UPDATE">UPDATE</option><option value="DELETE">DELETE</option></select></div></div>
-          <div class="field"><label for="pol-name">Policy name</label><input id="pol-name" class="mono" type="text" placeholder="users_manage_own_rows" required></div>
-          <div class="field"><label for="pol-using">USING expression</label><input id="pol-using" class="mono" type="text" value="auth.uid() = user_id"></div>
-          <div class="field"><label for="pol-check">WITH CHECK expression</label><input id="pol-check" class="mono" type="text" placeholder="Optional — defaults to USING expression for writes"></div>
-          <label class="checkbox-field"><input id="pol-enable-rls" type="checkbox" checked><span>Ensure FORCE ROW LEVEL SECURITY is enabled on target table</span></label>
-          <button class="btn btn-primary" type="submit">Create RLS policy</button>
-        </form>`, { subtitle: "Enforced natively by PostgreSQL under role_<slug>_rls.", iconName: "shield" })}
-        ${card("Active RLS Policies", `<div id="rls-policies-list">${loadingState("Loading RLS policies…")}</div>`, { subtitle: "Policies currently active across project tables.", iconName: "lock", flush: true })}
+    <div class="grid-sidebar-reverse">
+      <div class="stack">
+        ${card("Saved Queries", `<div id="saved-queries-list">${loadingState("Loading saved queries…")}</div>`, {
+          subtitle: "Server-stored SQL library shared with everyone who has access to this project.",
+          iconName: "save",
+          actions: `<button class="btn btn-secondary btn-sm" type="button" data-action="open-save-query">${icon("plus")}<span>Save current</span></button>`,
+          flush: true,
+        })}
+        ${card("Query Shortcuts", `<div class="quick-actions">
+          <button class="quick-action" type="button" data-action="sql-snippet" data-sql="SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() ORDER BY 1;">${icon("database")}<div><strong>List tables</strong><span>All relations in this project schema</span></div></button>
+          <button class="quick-action" type="button" data-action="sql-snippet" data-sql="SELECT schemaname AS table_schema, tablename, policyname, cmd, roles, qual FROM pg_policies WHERE schemaname = current_schema() ORDER BY tablename;">${icon("shield")}<div><strong>Inspect policies</strong><span>pg_policies for the active schema</span></div></button>
+          <button class="quick-action" type="button" data-action="sql-snippet" data-sql="SELECT relname AS relation, pg_size_pretty(pg_total_relation_size(quote_ident(current_schema()) || '.' || quote_ident(relname))) AS total_size FROM pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC;">${icon("activity")}<div><strong>Table sizes</strong><span>Storage footprint per relation</span></div></button>
+          <button class="quick-action" type="button" data-action="sql-snippet" data-sql="SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = current_schema() ORDER BY tablename, indexname;">${icon("layers")}<div><strong>List indexes</strong><span>Every index in the schema</span></div></button>
+        </div>`, { subtitle: "Load a common introspection query into the workbench.", iconName: "sparkles" })}
+      </div>
+      <div class="stack">
+        <section class="card">
+          <header class="card-header">
+            <div class="card-title"><span class="card-title-icon">${icon("terminal")}</span><div><h2>SQL Workbench</h2><p>Scoped to <code class="mono">${esc(state.activeProject.schema_name)}</code> with statement timeouts and destructive-query safeguards.</p></div></div>
+            <div class="card-header-actions"><select id="sql-history" class="compact-select" aria-label="Recent SQL queries"><option value="">Recent queries…</option></select></div>
+          </header>
+          <form id="sql-form" class="card-body stack-form">
+            <div class="editor-options">
+              <div class="field"><label for="sql-role-select">Execution role</label><select id="sql-role-select"><option value="service_role">service_role (owner — bypasses RLS)</option><option value="authenticated">authenticated (enforces RLS)</option><option value="anon">anon (enforces RLS)</option></select></div>
+              <div class="field"><label for="sql-user-id">Simulated auth.uid()</label><input id="sql-user-id" class="mono" type="text" placeholder="Optional UUID for RLS testing"></div>
+              <div class="field"><label for="sql-destructive">Destructive DDL</label><select id="sql-destructive"><option value="false">Block DROP / TRUNCATE</option><option value="true">Allow destructive SQL</option></select></div>
+            </div>
+            <div class="field"><label for="sql-editor-input">SQL query</label><textarea id="sql-editor-input" class="code-input code-lg" rows="9" spellcheck="false">SELECT current_schema() AS project_schema, current_user AS db_role, now() AS executed_at;</textarea></div>
+            <div class="editor-footer">
+              <span class="subtle">Press <kbd>⌘</kbd> + <kbd>Enter</kbd> to run · <span id="sql-active-query-label">unsaved query</span></span>
+              <div class="button-row"><button class="btn btn-ghost btn-sm" type="button" data-action="clear-sql">Clear</button><button class="btn btn-secondary btn-sm" type="button" data-action="open-save-query">${icon("save")}<span>Save query</span></button><button class="btn btn-primary" type="submit">${icon("play")}<span>Run query</span></button></div>
+            </div>
+          </form>
+          <div id="sql-result-box" class="sql-results"></div>
+        </section>
+        <div class="grid-2">
+          ${card("Create RLS Policy", `<form id="create-policy-form" class="stack-form">
+            <div class="field-row"><div class="field"><label for="pol-table">Target table</label><select id="pol-table" required></select></div><div class="field"><label for="pol-cmd">Command</label><select id="pol-cmd"><option value="ALL">ALL</option><option value="SELECT">SELECT</option><option value="INSERT">INSERT</option><option value="UPDATE">UPDATE</option><option value="DELETE">DELETE</option></select></div></div>
+            <div class="field"><label for="pol-name">Policy name</label><input id="pol-name" class="mono" type="text" placeholder="users_manage_own_rows" required></div>
+            <div class="field"><label for="pol-using">USING expression</label><input id="pol-using" class="mono" type="text" value="auth.uid() = user_id"></div>
+            <div class="field"><label for="pol-check">WITH CHECK expression</label><input id="pol-check" class="mono" type="text" placeholder="Optional — defaults to USING expression for writes"></div>
+            <label class="checkbox-field"><input id="pol-enable-rls" type="checkbox" checked><span>Ensure FORCE ROW LEVEL SECURITY is enabled on target table</span></label>
+            <button class="btn btn-primary" type="submit">Create RLS policy</button>
+          </form>`, { subtitle: "Enforced natively by PostgreSQL under role_<slug>_rls.", iconName: "shield" })}
+          ${card("Active RLS Policies", `<div id="rls-policies-list">${loadingState("Loading RLS policies…")}</div>`, { subtitle: "Policies currently active across project tables.", iconName: "lock", flush: true })}
+        </div>
       </div>
     </div>`,
 
@@ -364,7 +419,15 @@ const templates = {
     const slug = state.activeProject.slug;
     const base = `${window.location.origin}/v1/projects/${slug}`;
     return `${pageHeader("api")}
-      <div class="grid-2">
+      <div class="subnav-layout">
+      <div class="local-tabs" role="tablist" aria-label="API sections">
+        <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="api-explorer">${icon("play")}Live Explorer</button>
+        <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="api-endpoints">${icon("globe")}Table &amp; RPC Endpoints</button>
+        <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="api-openapi">${icon("file")}OpenAPI 3.1</button>
+      </div>
+      <div class="subnav-content">
+
+      <div id="local-api-explorer" class="local-panel">
         ${card("Interactive API & RPC Tester", `<form id="api-tester-form" class="stack-form">
           <div class="field-row" style="grid-template-columns:120px 1fr">
             <div class="field"><label for="api-test-method">Method</label><select id="api-test-method"><option value="GET">GET</option><option value="POST">POST</option><option value="PATCH">PATCH</option><option value="DELETE">DELETE</option></select></div>
@@ -378,22 +441,30 @@ const templates = {
           <button class="btn btn-primary" type="submit">${icon("play")}<span>Send live request</span></button>
         </form>
         <div class="top-gap"><div class="label-row"><span class="field-hint" id="api-test-meta">Response output</span><button class="btn btn-ghost btn-sm" type="button" data-action="copy-target" data-target="api-test-output">${icon("copy")}Copy</button></div><pre id="api-test-output" class="code-block">Send a request above to inspect live status, latency, and JSON payload.</pre></div>`, { subtitle: `Base URL: ${base}`, iconName: "play" })}
+      </div>
 
-        <div class="stack">
-          ${card("Auto-Generated Table & RPC Endpoints", `<div id="api-endpoints-catalog">${loadingState("Generating endpoint catalog from live schema…")}</div>`, { subtitle: "Click any table endpoint to load it into the Interactive API Tester.", iconName: "globe", flush: true })}
-          ${card("OpenAPI 3.1 Specification", `<div class="button-row" style="margin-bottom:10px"><button class="btn btn-secondary btn-sm" type="button" data-action="copy-target" data-target="openapi-preview">${icon("copy")}Copy JSON</button><button class="btn btn-secondary btn-sm" type="button" data-action="download-openapi">${icon("download")}Download</button><a id="openapi-link" class="btn btn-ghost btn-sm" href="${esc(`${base}/openapi.json`)}" target="_blank" rel="noopener">${icon("external")}Raw</a></div><pre id="openapi-preview" class="code-block code-scroll" style="max-height:260px">Loading OpenAPI 3.1 specification…</pre>`, { subtitle: "Machine-readable schema contract for codegen and API clients.", iconName: "file" })}
-        </div>
+      <div id="local-api-endpoints" class="local-panel hidden">
+        ${card("Auto-Generated Table & RPC Endpoints", `<div id="api-endpoints-catalog">${loadingState("Generating endpoint catalog from live schema…")}</div>`, { subtitle: "Click any table endpoint to load it into the Interactive API Tester.", iconName: "globe", flush: true })}
+      </div>
+
+      <div id="local-api-openapi" class="local-panel hidden">
+        ${card("OpenAPI 3.1 Specification", `<div class="button-row" style="margin-bottom:10px"><button class="btn btn-secondary btn-sm" type="button" data-action="copy-target" data-target="openapi-preview">${icon("copy")}Copy JSON</button><button class="btn btn-secondary btn-sm" type="button" data-action="download-openapi">${icon("download")}Download</button><a id="openapi-link" class="btn btn-ghost btn-sm" href="${esc(`${base}/openapi.json`)}" target="_blank" rel="noopener">${icon("external")}Raw</a></div><pre id="openapi-preview" class="code-block code-scroll" style="max-height:520px">Loading OpenAPI 3.1 specification…</pre>`, { subtitle: "Machine-readable schema contract for codegen and API clients.", iconName: "file" })}
+      </div>
+
+      </div>
       </div>`;
   },
 
   auth: () => `${pageHeader("auth")}
+    <div class="subnav-layout">
     <div class="local-tabs" role="tablist" aria-label="Authentication sections">
-      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="auth-users">Users</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-sessions">Active Sessions</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-policies">Policies &amp; OAuth</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-tester">Auth Flow &amp; Recovery Tester</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-operator">Operator Account</button>
+      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="auth-users">${icon("users")}Users</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-sessions">${icon("clock")}Active Sessions</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-policies">${icon("shield")}Policies &amp; OAuth</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-tester">${icon("play")}Auth Flow &amp; Recovery Tester</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-operator">${icon("key")}Operator Account</button>
     </div>
+    <div class="subnav-content">
 
     <div id="local-auth-users" class="local-panel">
       <div class="grid-sidebar-reverse">
@@ -461,24 +532,34 @@ const templates = {
           <button class="btn btn-primary" type="submit">Rotate operator password</button>
         </form>`, { subtitle: "Revokes other active Studio sessions for your account.", iconName: "shield" })}
       </div>
+    </div>
+    </div>
     </div>`,
 
   storage: () => `${pageHeader("storage")}
-    <div class="grid-sidebar">
-      <div class="stack">
-        ${card("Buckets", `<div id="buckets-list">${loadingState("Loading buckets…")}</div>`, { subtitle: "Isolated object containers with quota & MIME enforcement.", iconName: "storage", flush: true })}
-        <details id="create-bucket-disclosure" class="disclosure card">
-          <summary><span>${icon("plus")} New bucket</span><span class="subtle">Container</span></summary>
-          <form id="create-bucket-form" class="disclosure-body stack-form">
-            <div class="field"><label for="bucket-name">Bucket name</label><input id="bucket-name" class="mono" type="text" placeholder="avatars" required></div>
-            <div class="field-row"><div class="field"><label for="bucket-public">Access</label><select id="bucket-public"><option value="false">Private (signed URLs / policies)</option><option value="true">Public read</option></select></div><div class="field"><label for="bucket-limit">Max file size (MB)</label><input id="bucket-limit" type="number" min="1" value="25"></div></div>
-            <div class="field"><label for="bucket-mimes">Allowed MIME types (comma-separated, optional)</label><input id="bucket-mimes" class="mono" type="text" placeholder="image/png, image/jpeg, application/pdf"></div>
-            <button class="btn btn-primary w-full" type="submit">Create bucket</button>
-          </form>
-        </details>
-      </div>
-      <div class="stack">
-        <div class="grid-2">
+    <div class="subnav-layout">
+    <div class="local-tabs" role="tablist" aria-label="Storage sections">
+      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="storage-buckets">${icon("storage")}Buckets &amp; Objects</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="storage-settings">${icon("settings")}Settings &amp; Signed URLs</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="storage-policies">${icon("shield")}Access Policies</button>
+    </div>
+    <div class="subnav-content">
+
+    <div id="local-storage-buckets" class="local-panel">
+      <div class="grid-sidebar">
+        <div class="stack">
+          ${card("Buckets", `<div id="buckets-list">${loadingState("Loading buckets…")}</div>`, { subtitle: "Isolated object containers with quota & MIME enforcement.", iconName: "storage", flush: true })}
+          <details id="create-bucket-disclosure" class="disclosure card">
+            <summary><span>${icon("plus")} New bucket</span><span class="subtle">Container</span></summary>
+            <form id="create-bucket-form" class="disclosure-body stack-form">
+              <div class="field"><label for="bucket-name">Bucket name</label><input id="bucket-name" class="mono" type="text" placeholder="avatars" required></div>
+              <div class="field-row"><div class="field"><label for="bucket-public">Access</label><select id="bucket-public"><option value="false">Private (signed URLs / policies)</option><option value="true">Public read</option></select></div><div class="field"><label for="bucket-limit">Max file size (MB)</label><input id="bucket-limit" type="number" min="1" value="25"></div></div>
+              <div class="field"><label for="bucket-mimes">Allowed MIME types (comma-separated, optional)</label><input id="bucket-mimes" class="mono" type="text" placeholder="image/png, image/jpeg, application/pdf"></div>
+              <button class="btn btn-primary w-full" type="submit">Create bucket</button>
+            </form>
+          </details>
+        </div>
+        <div class="stack">
           ${card("Upload Object", `<form id="upload-object-form" class="stack-form">
             <div class="field-row"><div class="field"><label for="obj-path">Object path</label><input id="obj-path" class="mono" type="text" placeholder="docs/welcome.txt" required></div><div class="field"><label for="obj-mime">Content-Type</label><input id="obj-mime" class="mono" type="text" value="text/plain"></div></div>
             <div class="field"><label for="obj-file">Binary / file upload</label><label class="file-drop" for="obj-file">${icon("upload")}<div><strong>Choose a local file</strong><span id="obj-file-label">Or enter text content below</span></div><input id="obj-file" type="file"></label></div>
@@ -486,48 +567,67 @@ const templates = {
             <div class="editor-footer"><span class="subtle" id="active-bucket-label">Select a bucket first</span><button class="btn btn-primary" type="submit">${icon("upload")}<span>Upload</span></button></div>
           </form>`, { subtitle: "Stores SHA-256 checksums and custom metadata.", iconName: "upload" })}
 
-          ${card("Bucket Settings & Signed URLs", `<form id="update-bucket-form" class="stack-form">
-            <div class="field-row three">
-              <div class="field"><label for="bset-public">Visibility</label><select id="bset-public"><option value="false">Private</option><option value="true">Public</option></select></div>
-              <div class="field"><label for="bset-limit">Max file (MB)</label><input id="bset-limit" type="number" min="1" value="25"></div>
-              <div class="field"><label for="bset-quota">Bucket quota (MB)</label><input id="bset-quota" type="number" min="0" placeholder="0 = default"></div>
-            </div>
-            <div class="field"><label for="bset-mimes">Allowed MIME types</label><input id="bset-mimes" class="mono" type="text" placeholder="Leave blank for any MIME"></div>
-            <button class="btn btn-secondary btn-sm" type="submit">Save bucket settings</button>
-          </form>
-          <div class="divider"></div>
-          <form id="sign-object-form" class="stack-form">
-            <span class="field-hint"><strong>Generate Signed URL</strong> (private download or client upload)</span>
-            <div class="field-row three">
-              <input id="sign-path" class="mono" type="text" placeholder="docs/welcome.txt" required>
-              <select id="sign-op"><option value="download">download</option><option value="upload">upload</option></select>
-              <input id="sign-ttl" type="number" min="10" max="604800" value="600" title="TTL seconds">
-            </div>
-            <button class="btn btn-secondary btn-sm" type="submit">Create signed URL</button>
-          </form>
-          <div id="signed-url-result" class="top-gap"></div>`, { subtitle: "Configure active bucket limits and issue time-limited HMAC URLs.", iconName: "link" })}
+          ${card("Stored Objects", `<div class="list-toolbar"><input id="object-prefix" type="search" placeholder="Filter by path prefix…" aria-label="Filter objects"></div><div id="bucket-objects-list">${loadingState("Loading objects…")}</div><div id="object-metadata-box"></div>`, { subtitle: "Inspect SHA-256 metadata, download via signed URL, or delete.", iconName: "file", flush: true })}
         </div>
-
-        ${card("Stored Objects", `<div class="list-toolbar"><input id="object-prefix" type="search" placeholder="Filter by path prefix…" aria-label="Filter objects"></div><div id="bucket-objects-list">${loadingState("Loading objects…")}</div><div id="object-metadata-box"></div>`, { subtitle: "Inspect SHA-256 metadata, download via signed URL, or delete.", iconName: "file", flush: true })}
-
-        ${card("Bucket Access Policies", `<form id="create-storage-policy-form" class="inline-form">
-          <input id="spol-name" class="mono" type="text" placeholder="allow_user_avatars" required>
-          <select id="spol-op"><option value="ALL">ALL</option><option value="SELECT">SELECT</option><option value="INSERT">INSERT</option><option value="UPDATE">UPDATE</option><option value="DELETE">DELETE</option></select>
-          <input id="spol-roles" class="mono" type="text" value="authenticated" placeholder="authenticated, anon">
-          <input id="spol-prefix" class="mono" type="text" placeholder="path prefix (opt)">
-          <label class="checkbox-field"><input id="spol-owner" type="checkbox"><span>Owner only</span></label>
-          <button class="btn btn-primary btn-sm" type="submit">Add policy</button>
-        </form><div id="storage-policies-list" class="top-gap">${loadingState("Loading bucket policies…")}</div>`, { subtitle: "Backend-enforced access control rules for non-service_role requests.", iconName: "shield" })}
       </div>
+    </div>
+
+    <div id="local-storage-settings" class="local-panel hidden">
+      <div class="grid-2">
+        ${card("Bucket Settings", `<form id="update-bucket-form" class="stack-form">
+          <div class="field-row three">
+            <div class="field"><label for="bset-public">Visibility</label><select id="bset-public"><option value="false">Private</option><option value="true">Public</option></select></div>
+            <div class="field"><label for="bset-limit">Max file (MB)</label><input id="bset-limit" type="number" min="1" value="25"></div>
+            <div class="field"><label for="bset-quota">Bucket quota (MB)</label><input id="bset-quota" type="number" min="0" placeholder="0 = default"></div>
+          </div>
+          <div class="field"><label for="bset-mimes">Allowed MIME types</label><input id="bset-mimes" class="mono" type="text" placeholder="Leave blank for any MIME"></div>
+          <button class="btn btn-secondary btn-sm" type="submit">Save bucket settings</button>
+        </form>`, { subtitle: "Configure visibility and limits for the active bucket.", iconName: "settings" })}
+        ${card("Signed URLs", `<form id="sign-object-form" class="stack-form">
+          <span class="field-hint"><strong>Generate Signed URL</strong> (private download or client upload)</span>
+          <div class="field-row three">
+            <input id="sign-path" class="mono" type="text" placeholder="docs/welcome.txt" required>
+            <select id="sign-op"><option value="download">download</option><option value="upload">upload</option></select>
+            <input id="sign-ttl" type="number" min="10" max="604800" value="600" title="TTL seconds">
+          </div>
+          <button class="btn btn-secondary btn-sm" type="submit">Create signed URL</button>
+        </form>
+        <div id="signed-url-result" class="top-gap"></div>`, { subtitle: "Time-limited HMAC URLs for private objects and direct client uploads.", iconName: "link" })}
+      </div>
+    </div>
+
+    <div id="local-storage-policies" class="local-panel hidden">
+      ${card("Bucket Access Policies", `<form id="create-storage-policy-form" class="inline-form">
+        <input id="spol-name" class="mono" type="text" placeholder="allow_user_avatars" required>
+        <select id="spol-op"><option value="ALL">ALL</option><option value="SELECT">SELECT</option><option value="INSERT">INSERT</option><option value="UPDATE">UPDATE</option><option value="DELETE">DELETE</option></select>
+        <input id="spol-roles" class="mono" type="text" value="authenticated" placeholder="authenticated, anon">
+        <input id="spol-prefix" class="mono" type="text" placeholder="path prefix (opt)">
+        <label class="checkbox-field"><input id="spol-owner" type="checkbox"><span>Owner only</span></label>
+        <button class="btn btn-primary btn-sm" type="submit">Add policy</button>
+      </form><div id="storage-policies-list" class="top-gap">${loadingState("Loading bucket policies…")}</div>`, { subtitle: "Backend-enforced access control rules for non-service_role requests on the active bucket.", iconName: "shield" })}
+    </div>
+
+    </div>
     </div>`,
 
   realtime: () => `${pageHeader("realtime")}
     <div id="realtime-status-cards" class="stats-grid stats-3">${loadingState("Loading realtime broker status…")}</div>
-    <div class="grid-2 section-gap">
+    <div class="subnav-layout">
+    <div class="local-tabs" role="tablist" aria-label="Realtime sections">
+      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="rt-inspector">${icon("realtime")}Live Inspector</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="rt-publish">${icon("play")}Broadcast &amp; Channels</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="rt-history">${icon("clock")}Event History</button>
+    </div>
+    <div class="subnav-content">
+
+    <div id="local-rt-inspector" class="local-panel">
       ${card("Live WebSocket Inspector", `<div id="rt-connection-banner" class="connection-banner" role="status"><span class="status-dot"></span><span>Disconnected. Choose a topic and connect to stream live events.</span></div>
         <form id="rt-connect-form" class="inline-form top-gap"><input id="rt-topic" class="mono" type="text" value="db:*" aria-label="Realtime topic" required><button class="btn btn-primary btn-sm" type="submit">Connect &amp; subscribe</button><button class="btn btn-secondary btn-sm" type="button" data-action="rt-disconnect">Disconnect</button></form>
         <div class="log-box-wrap top-gap"><div class="label-row"><span class="field-hint">Live WebSocket frames</span><button class="btn btn-ghost btn-sm" type="button" data-action="clear-realtime-log">Clear</button></div><pre id="rt-stream-log" class="code-block log-stream">Waiting for a realtime connection…</pre></div>`, { subtitle: "Authenticates with a scoped project API key over native WebSocket.", iconName: "realtime" })}
-      <div class="stack">
+    </div>
+
+    <div id="local-rt-publish" class="local-panel hidden">
+      <div class="grid-2">
         ${card("Publish Broadcast Event", `<form id="rt-broadcast-form" class="stack-form">
           <div class="field-row"><div class="field"><label for="rt-broadcast-topic">Topic</label><input id="rt-broadcast-topic" class="mono" type="text" value="room:lobby" required></div><div class="field"><label for="rt-event">Event name</label><input id="rt-event" class="mono" type="text" value="announcement" required></div></div>
           <div class="field"><label for="rt-payload">JSON payload</label><textarea id="rt-payload" class="code-input" rows="3">{"message": "Deployment ready"}</textarea></div>
@@ -536,16 +636,22 @@ const templates = {
         ${card("Configure Channel", `<form id="rt-channel-form" class="inline-form"><input id="rt-chan-topic" class="mono" type="text" placeholder="room:orders" required><label class="checkbox-field"><input id="rt-chan-private" type="checkbox"><span>Private channel</span></label><button class="btn btn-secondary btn-sm" type="submit">Save channel</button></form><div id="rt-channels-list" class="top-gap">${loadingState("Loading channels…")}</div>`, { subtitle: "Register public or private realtime topics.", iconName: "layers" })}
       </div>
     </div>
-    <div class="section-gap">
+
+    <div id="local-rt-history" class="local-panel hidden">
       ${card("Persisted Event History", `<div id="rt-events-table">${loadingState("Loading persisted events…")}</div>`, { subtitle: "Recent PostgreSQL trigger changes and HTTP/WebSocket broadcasts.", iconName: "clock", flush: true })}
+    </div>
+
+    </div>
     </div>`,
 
   functions: () => `${pageHeader("functions")}
+    <div class="subnav-layout">
     <div class="local-tabs" role="tablist" aria-label="Compute modules">
-      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="functions">Server Functions</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="jobs">Background Jobs</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="schedules">Recurring Schedules</button>
+      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="functions">${icon("function")}Server Functions</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="jobs">${icon("clock")}Background Jobs</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="schedules">${icon("refresh")}Recurring Schedules</button>
     </div>
+    <div class="subnav-content">
 
     <div id="local-functions" class="local-panel">
       <div class="grid-2">
@@ -591,24 +697,45 @@ const templates = {
         </form>`, { subtitle: "Automatically enqueues durable jobs on schedule.", iconName: "plus" })}
         ${card("Configured Schedules", `<div id="schedules-list">${loadingState("Loading schedules…")}</div>`, { subtitle: "Active recurring tasks for this project.", iconName: "clock", flush: true })}
       </div>
+    </div>
+    </div>
     </div>`,
 
   logs: () => `${pageHeader("logs")}
-    <div class="grid-2">
-      ${card("Truthful Subsystem Health Matrix", `<div id="logs-module-matrix">${loadingState("Running live verification probes…")}</div>`, { subtitle: "Distinguishes operational_verified, requires_configuration, unavailable, and failed states.", iconName: "activity" })}
-      ${card("Resource Quotas & Live Consumption", `<div id="logs-quota-meters">${loadingState("Measuring database, storage, and worker usage…")}</div>`, { subtitle: "Real PostgreSQL relation sizes, bucket bytes, functions, and job counts against project quotas.", iconName: "database" })}
+    <div class="subnav-layout">
+    <div class="local-tabs" role="tablist" aria-label="Logs and monitoring sections">
+      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="logs-health">${icon("activity")}Health &amp; Quotas</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="logs-errors">${icon("alert")}Error Logs</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="logs-audit">${icon("shield")}Audit Trail</button>
     </div>
-    <div class="grid-2 section-gap">
+    <div class="subnav-content">
+
+    <div id="local-logs-health" class="local-panel">
+      <div class="grid-2">
+        ${card("Truthful Subsystem Health Matrix", `<div id="logs-module-matrix">${loadingState("Running live verification probes…")}</div>`, { subtitle: "Distinguishes operational_verified, requires_configuration, unavailable, and failed states.", iconName: "activity" })}
+        ${card("Resource Quotas & Live Consumption", `<div id="logs-quota-meters">${loadingState("Measuring database, storage, and worker usage…")}</div>`, { subtitle: "Real PostgreSQL relation sizes, bucket bytes, functions, and job counts against project quotas.", iconName: "database" })}
+      </div>
+    </div>
+
+    <div id="local-logs-errors" class="local-panel hidden">
       ${card("Structured Error & Warning Logs", `<div class="list-toolbar" style="display:flex;gap:8px"><select id="err-source-filter" aria-label="Error source"><option value="">All sources</option><option value="api">API</option><option value="database">Database</option><option value="auth">Auth</option><option value="storage">Storage</option><option value="function">Function</option><option value="job">Background Job</option></select><input id="err-search-filter" type="search" placeholder="Search error message or path…"></div><div id="error-logs-list">${loadingState("Loading error logs…")}</div>`, { subtitle: "Captured 4xx/5xx API errors, database failures, and worker exceptions.", iconName: "alert", flush: true })}
+    </div>
+
+    <div id="local-logs-audit" class="local-panel hidden">
       ${card("Project Security & Operational Audit Trail", `<div class="list-toolbar"><input id="audit-action-filter" type="search" placeholder="Filter by action (e.g. database.table_created)…" aria-label="Filter audit events"></div><div id="audit-events-list">${loadingState("Loading audit events…")}</div>`, { subtitle: "Immutable record of schema changes, key rotations, user admin, and restores.", iconName: "shield", flush: true })}
+    </div>
+
+    </div>
     </div>`,
 
   backups: () => `${pageHeader("backups")}
+    <div class="subnav-layout">
     <div class="local-tabs" role="tablist" aria-label="Backups and project settings">
-      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="backups-main">Snapshots &amp; Recovery</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="project-settings">Project Settings &amp; Quotas</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="android-companion">Android Companion &amp; APK</button>
+      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="backups-main">${icon("storage")}Snapshots &amp; Recovery</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="project-settings">${icon("settings")}Project Settings &amp; Quotas</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="android-companion">${icon("sparkles")}Android Companion &amp; APK</button>
     </div>
+    <div class="subnav-content">
 
     <div id="local-backups-main" class="local-panel">
       <div class="grid-sidebar-reverse">
@@ -644,18 +771,22 @@ const templates = {
         ${card("Android Companion & Build Pipeline Status", `<div id="apk-status-box">${loadingState("Inspecting compiled APK artifact and Gradle toolchain…")}</div>`, { subtitle: "Genuine Android Gradle pipeline (android/) + apksigner verification.", iconName: "sparkles" })}
         ${card("Trigger Local Gradle Build", `<form id="build-apk-form" class="stack-form">
           <div class="field"><label for="apk-server-url">Default MARRY BASE URL</label><input id="apk-server-url" class="mono" type="url" value="${esc(window.location.origin)}" required></div>
-          <div class="field-row"><div class="field"><label for="apk-version-name">Version name</label><input id="apk-version-name" class="mono" type="text" value="1.1.0" required></div><div class="field"><label for="apk-version-code">Version code</label><input id="apk-version-code" type="number" min="1" value="2" required></div></div>
+          <div class="field-row"><div class="field"><label for="apk-version-name">Version name</label><input id="apk-version-name" class="mono" type="text" value="1.2.0" required></div><div class="field"><label for="apk-version-code">Version code</label><input id="apk-version-code" type="number" min="1" value="3" required></div></div>
           <button class="btn btn-primary" type="submit">Compile APK with Gradle</button>
         </form><div id="apk-build-result" class="top-gap"></div>`, { subtitle: "Requires JDK 17 + Android SDK + Gradle on the host, or builds automatically in GitHub Actions CI.", iconName: "download" })}
       </div>
+    </div>
+    </div>
     </div>`,
 
   security: () => `${pageHeader("security")}
+    <div class="subnav-layout">
     <div class="local-tabs" role="tablist" aria-label="Security sections">
-      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="keys">API Keys</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="secrets">Encrypted Secrets</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="members">Project Team &amp; RBAC</button>
+      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="keys">${icon("key")}API Keys</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="secrets">${icon("lock")}Encrypted Secrets</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="members">${icon("users")}Project Team &amp; RBAC</button>
     </div>
+    <div class="subnav-content">
 
     <div id="local-keys" class="local-panel">
       <div class="grid-sidebar-reverse">
@@ -690,6 +821,8 @@ const templates = {
         </form>`, { subtitle: "Operators in the project's parent Workspace also inherit access automatically.", iconName: "users" })}
         ${card("Direct Project Members", `<div id="members-list">${loadingState("Loading members…")}</div>`, { subtitle: "Role-based control-plane access for this project.", iconName: "shield", flush: true })}
       </div>
+    </div>
+    </div>
     </div>`,
 
   platform: () => `${pageHeader("platform")}
@@ -965,11 +1098,19 @@ export async function browseTable(tableName, knownVersion = null) {
 
   if ($("active-table-label")) $("active-table-label").textContent = `· ${tableName}`;
   if ($("table-rows-container")) $("table-rows-container").innerHTML = loadingState("Loading rows…");
+  if ($("alt-table-current")) $("alt-table-current").textContent = `(current: ${tableName})`;
+  const altColSelect = $("alt2-col-name");
+  if (altColSelect && tableInfo) {
+    const previous = altColSelect.value;
+    altColSelect.innerHTML = `<option value="">Select column…</option>${(tableInfo.columns || []).map((col) => `<option value="${esc(col.name)}">${esc(col.name)} — ${esc(col.dataType)}</option>`).join("")}`;
+    if ([...altColSelect.options].some((opt) => opt.value === previous)) altColSelect.value = previous;
+  }
 
   const rb = state.rowBrowser;
   const params = new URLSearchParams();
   params.set("limit", String(rb.limit));
   params.set("offset", String(rb.offset));
+  params.set("count", "exact");
   if (rb.orderBy) params.set("order", `${rb.orderBy}.${rb.orderDir || "desc"}`);
   if (rb.filter) {
     for (const part of rb.filter.split("&")) {
@@ -983,25 +1124,32 @@ export async function browseTable(tableName, knownVersion = null) {
     if (state.activeProject?.slug !== slug || state.activeTable !== tableName || state.requestVersion !== version) return;
     const rows = response.data || [];
     rb.rows = rows;
+    rb.total = typeof response.count === "number" ? response.count : null;
     const pkCol = tableInfo?.columns?.find((c) => c.isPrimaryKey)?.name || (rows[0] && "id" in rows[0] ? "id" : null);
 
     if ($("active-table-details")) {
       $("active-table-details").textContent = tableInfo
-        ? `${tableInfo.columns.length} columns · ${tableInfo.rlsEnabled ? "RLS enabled" : "RLS disabled"} · showing ${rows.length} row(s) from offset ${rb.offset}`
+        ? `${tableInfo.columns.length} columns · ${tableInfo.rlsEnabled ? "RLS enabled" : "RLS disabled"}${rb.total !== null ? ` · ${formatNumber(rb.total)} row(s) total` : ""}`
         : `Showing ${rows.length} row(s)`;
     }
     const pageNum = Math.floor(rb.offset / rb.limit) + 1;
-    if ($("row-pagination-label")) $("row-pagination-label").textContent = `Page ${pageNum} · Offset ${rb.offset} (${rows.length} rows)`;
+    const rangeLabel = rows.length ? `Rows ${rb.offset + 1}–${rb.offset + rows.length}${rb.total !== null ? ` of ${formatNumber(rb.total)}` : ""}` : "No rows";
+    if ($("row-pagination-label")) $("row-pagination-label").textContent = `Page ${pageNum} · ${rangeLabel}`;
     if ($("row-prev-btn")) $("row-prev-btn").disabled = rb.offset <= 0;
-    if ($("row-next-btn")) $("row-next-btn").disabled = rows.length < rb.limit;
+    if ($("row-next-btn")) $("row-next-btn").disabled = rb.total !== null ? rb.offset + rows.length >= rb.total : rows.length < rb.limit;
 
     if (!rows.length) {
       $("table-rows-container").innerHTML = emptyState("file", rb.filter ? "No matching rows" : "This table is empty", rb.filter ? "Adjust or clear the filter query above." : "Insert a JSON row below or send a POST request from the API Explorer.");
       return;
     }
     const columns = [...new Set([...(tableInfo?.columns?.map((c) => c.name) || []), ...rows.flatMap((row) => Object.keys(row))])];
-    const body = rows.map((row, idx) => `<tr>${columns.map((column) => `<td>${formatCell(row[column])}</td>`).join("")}<td>${pkCol && row[pkCol] !== undefined ? `<div class="cell-actions"><button class="btn btn-secondary btn-sm" type="button" data-action="open-edit-row" data-idx="${idx}" data-pk-col="${esc(pkCol)}">Edit</button><button class="icon-btn btn-sm" type="button" data-action="delete-row" data-pk-col="${esc(pkCol)}" data-pk-val="${esc(row[pkCol])}" aria-label="Delete row">${icon("trash")}</button></div>` : ""}</td></tr>`).join("");
-    $("table-rows-container").innerHTML = table([...columns, ""], body);
+    const columnMeta = new Map((tableInfo?.columns || []).map((col) => [col.name, col]));
+    const headers = columns.map((column) => {
+      const meta = columnMeta.get(column);
+      return meta ? { label: column, sub: meta.dataType || meta.udtName || "" } : column;
+    });
+    const body = rows.map((row, idx) => `<tr>${columns.map((column) => `<td>${formatCell(row[column])}</td>`).join("")}<td><div class="cell-actions"><button class="icon-btn btn-sm" type="button" data-action="copy-row-json" data-idx="${idx}" title="Copy row as JSON" aria-label="Copy row ${idx} as JSON">${icon("copy")}</button>${pkCol && row[pkCol] !== undefined ? `<button class="btn btn-secondary btn-sm" type="button" data-action="open-edit-row" data-idx="${idx}" data-pk-col="${esc(pkCol)}">Edit</button><button class="icon-btn btn-sm" type="button" data-action="delete-row" data-pk-col="${esc(pkCol)}" data-pk-val="${esc(row[pkCol])}" title="Delete row" aria-label="Delete row">${icon("trash")}</button>` : ""}</div></td></tr>`).join("");
+    $("table-rows-container").innerHTML = table([...headers, ""], body, { scroll: true });
   } catch (error) {
     if ($("table-rows-container")) $("table-rows-container").innerHTML = errorState(error, "refresh-rows");
   }
@@ -1021,10 +1169,20 @@ function renderPolicies() {
 }
 
 async function loadSql(version, slug) {
-  const response = await api(`/v1/projects/${encodeURIComponent(slug)}/database/tables`);
+  const base = `/v1/projects/${encodeURIComponent(slug)}`;
+  const [response, queriesResponse] = await Promise.all([
+    api(`${base}/database/tables`),
+    api(`${base}/database/queries`),
+  ]);
   if (!isCurrent("sql", version, slug)) return;
   state.tables = response.tables || [];
+  state.savedQueries = queriesResponse.queries || [];
+  if (state.activeSavedQueryId && !state.savedQueries.some((q) => q.id === state.activeSavedQueryId)) {
+    state.activeSavedQueryId = null;
+  }
   renderPolicies();
+  renderSavedQueries();
+  updateSavedQueryLabel();
 }
 
 async function loadMigrations(version, slug) {
@@ -1380,9 +1538,90 @@ export async function loadPage(tab = state.activeTab) {
 export function renderSqlResult(result) {
   const container = $("sql-result-box");
   if (!container) return;
+  state.lastSqlResult = result;
   const rows = result.rows || [];
-  const body = rows.length ? table(Object.keys(rows[0]), rows.map((row) => `<tr>${Object.keys(rows[0]).map((column) => `<td>${formatCell(row[column])}</td>`).join("")}</tr>`).join("")) : emptyState("check", "Statement completed", "The SQL query succeeded and returned 0 rows.");
-  container.innerHTML = `<div class="result-meta">${badge("success", "success", "Success")}<span>${formatNumber(result.rowCount ?? rows.length)} row(s)</span><span>${formatNumber(result.durationMs)} ms</span></div>${body}`;
+  const body = rows.length ? table(Object.keys(rows[0]), rows.map((row) => `<tr>${Object.keys(rows[0]).map((column) => `<td>${formatCell(row[column])}</td>`).join("")}</tr>`).join(""), { scroll: true }) : emptyState("check", "Statement completed", "The SQL query succeeded and returned 0 rows.");
+  const exportActions = rows.length
+    ? `<span class="grow"></span><button class="btn btn-ghost btn-sm" type="button" data-action="copy-sql-result">${icon("copy")}Copy JSON</button><button class="btn btn-ghost btn-sm" type="button" data-action="export-sql-csv">${icon("download")}Export CSV</button>`
+    : "";
+  container.innerHTML = `<div class="result-meta">${badge("success", "success", "Success")}<span>${formatNumber(result.rowCount ?? rows.length)} row(s)</span><span>${formatNumber(result.durationMs)} ms</span>${exportActions}</div>${body}`;
+}
+
+export function renderSavedQueries() {
+  const container = $("saved-queries-list");
+  if (!container) return;
+  const queries = state.savedQueries || [];
+  if (!queries.length) {
+    container.innerHTML = emptyState("save", "No saved queries yet", "Write a query in the workbench and save it to share with your team.");
+    return;
+  }
+  container.innerHTML = `<div class="resource-list">${queries.map((query) => `<div class="saved-query-item ${state.activeSavedQueryId === query.id ? "active" : ""}"><div class="list-main"><span class="resource-icon">${icon(query.favorite ? "star" : "save")}</span><div class="list-text"><button class="resource-link" type="button" data-action="load-saved-query" data-id="${esc(query.id)}" title="${esc(query.description || query.name)}">${esc(query.name)}</button><small>${esc(truncate(query.sql.replace(/\s+/g, " "), 52))}${query.run_count > 0 ? ` · run ${formatNumber(query.run_count)}×` : ""}</small></div></div><div class="list-actions"><button class="icon-btn btn-sm" type="button" data-action="edit-saved-query" data-id="${esc(query.id)}" title="Edit saved query">${icon("terminal")}</button><button class="icon-btn btn-sm" type="button" data-action="delete-saved-query" data-id="${esc(query.id)}" data-name="${esc(query.name)}" title="Delete saved query">${icon("trash")}</button></div></div>`).join("")}</div>`;
+}
+
+function columnInputHtml(col, value, idPrefix) {
+  const name = esc(col.name);
+  const type = String(col.dataType || col.udtName || "text").toLowerCase();
+  const inputId = `${idPrefix}-${col.name}`;
+  const isBool = type === "boolean" || type === "bool";
+  const isJson = type.includes("json");
+  const isNumeric = ["integer", "bigint", "smallint", "numeric", "real", "double precision", "serial", "bigserial", "int", "int4", "int8", "float8"].includes(type);
+  const isTimestamp = type.includes("timestamp");
+  const serialized = value === null || value === undefined
+    ? ""
+    : typeof value === "object" ? JSON.stringify(value) : String(value);
+
+  let control;
+  if (isBool) {
+    control = `<select id="${esc(inputId)}" data-col="${name}" data-kind="boolean"><option value="" ${value === null || value === undefined ? "selected" : ""}>NULL / default</option><option value="true" ${value === true || value === "true" ? "selected" : ""}>true</option><option value="false" ${value === false || value === "false" ? "selected" : ""}>false</option></select>`;
+  } else if (isJson) {
+    control = `<textarea id="${esc(inputId)}" class="code-input" rows="2" data-col="${name}" data-kind="json" placeholder='{"key": "value"}'>${esc(serialized)}</textarea>`;
+  } else if (isNumeric) {
+    control = `<input id="${esc(inputId)}" type="text" inputmode="decimal" data-col="${name}" data-kind="number" value="${esc(serialized)}" placeholder="number">`;
+  } else if (isTimestamp) {
+    control = `<input id="${esc(inputId)}" type="text" class="mono" data-col="${name}" data-kind="text" value="${esc(serialized)}" placeholder="2026-01-01T12:00:00Z or now()">`;
+  } else {
+    control = `<input id="${esc(inputId)}" type="text" data-col="${name}" data-kind="text" value="${esc(serialized)}" placeholder="${esc(type)}">`;
+  }
+  const constraints = [
+    col.isPrimaryKey ? "PK" : "",
+    col.isNullable === false ? "NOT NULL" : "",
+  ].filter(Boolean).join(" · ");
+  return `<div class="col-label"><strong>${name}</strong><small>${esc(type)}${constraints ? ` · ${esc(constraints)}` : ""}</small></div><div class="col-input">${control}</div>`;
+}
+
+export function buildColumnFormFields(columns, row = null, idPrefix = "col") {
+  if (!Array.isArray(columns) || !columns.length) {
+    return `<p class="subtle">No column metadata available — use the raw JSON insert instead.</p>`;
+  }
+  return columns.map((col) => columnInputHtml(col, row ? row[col.name] : null, idPrefix)).join("");
+}
+
+export function collectColumnFormPayload(container) {
+  const payload = {};
+  container.querySelectorAll("[data-col]").forEach((input) => {
+    const column = input.dataset.col;
+    const kind = input.dataset.kind;
+    const raw = String(input.value ?? "").trim();
+    if (raw === "") return; // leave to column defaults / NULL
+    if (kind === "boolean") {
+      payload[column] = raw === "true";
+    } else if (kind === "json") {
+      try { payload[column] = JSON.parse(raw); } catch { throw new Error(`Column "${column}" is not valid JSON.`); }
+    } else if (kind === "number") {
+      const num = Number(raw);
+      payload[column] = Number.isFinite(num) ? num : raw;
+    } else {
+      payload[column] = raw;
+    }
+  });
+  return payload;
+}
+
+export function updateSavedQueryLabel() {
+  const label = $("sql-active-query-label");
+  if (!label) return;
+  const active = state.savedQueries.find((query) => query.id === state.activeSavedQueryId);
+  label.textContent = active ? `editing saved query · ${active.name}` : "unsaved query";
 }
 
 export function updateRealtimeUi(status, message = "") {
