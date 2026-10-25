@@ -154,7 +154,7 @@ public class MainActivity extends Activity {
         card.addView(title, titleLp);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Connect to your self-hosted MARI BASE instance. We verify database and storage readiness before opening Management Studio.");
+        subtitle.setText("This app is the control panel, not the server itself. Start or deploy MARI BASE first, then connect here. The backend must be reachable from this phone.");
         subtitle.setTextColor(Color.parseColor("#9CA3AF"));
         subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
@@ -165,7 +165,7 @@ public class MainActivity extends Activity {
         card.addView(subtitle, subLp);
 
         TextView inputLabel = new TextView(this);
-        inputLabel.setText("MARI BASE Server URL");
+        inputLabel.setText("Backend server address");
         inputLabel.setTextColor(Color.parseColor("#E5E7EB"));
         inputLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         inputLabel.setTypeface(Typeface.DEFAULT_BOLD);
@@ -207,18 +207,30 @@ public class MainActivity extends Activity {
         });
         presetRow.addView(emulatorChip);
 
-        Button localChip = createSecondarySmallButton("Localhost (4100)");
+        Button localChip = createSecondarySmallButton("LAN example");
         LinearLayout.LayoutParams localChipLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
         localChipLp.leftMargin = dp(8);
         localChip.setOnClickListener(v -> {
-            urlInput.setText("http://127.0.0.1:4100");
+            urlInput.setText("http://192.168.1.20:4100");
             allowHttpCheck.setChecked(true);
         });
         presetRow.addView(localChip, localChipLp);
         card.addView(presetRow, presetLp);
+
+        TextView addressHelp = new TextView(this);
+        addressHelp.setText("Important: localhost / 127.0.0.1 means this phone. If your server runs on a computer or another phone, use that device's Wi-Fi/LAN IP (example: http://192.168.1.20:4100) or its deployed HTTPS URL. Replace the example IP with the real one.");
+        addressHelp.setTextColor(Color.parseColor("#A7B7C8"));
+        addressHelp.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        addressHelp.setLineSpacing(dp(2), 1f);
+        LinearLayout.LayoutParams addressHelpLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        addressHelpLp.topMargin = dp(8);
+        card.addView(addressHelp, addressHelpLp);
 
         allowHttpCheck = new CheckBox(this);
         allowHttpCheck.setText("Allow cleartext HTTP for local / LAN development (HTTPS enforced for remote hosts)");
@@ -242,14 +254,14 @@ public class MainActivity extends Activity {
         statusLp.topMargin = dp(14);
 
         statusTitle = new TextView(this);
-        statusTitle.setText("Awaiting server verification");
+        statusTitle.setText("No server connected");
         statusTitle.setTextColor(Color.parseColor("#E5E7EB"));
         statusTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         statusTitle.setTypeface(Typeface.DEFAULT_BOLD);
         statusBox.addView(statusTitle);
 
         statusDetail = new TextView(this);
-        statusDetail.setText("Enter your server URL, then verify readiness before opening Studio.");
+        statusDetail.setText("Enter the address of a running MARI BASE backend. A successful connection opens the full Studio interface.");
         statusDetail.setTextColor(Color.parseColor("#9CA3AF"));
         statusDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         LinearLayout.LayoutParams detailLp = new LinearLayout.LayoutParams(
@@ -262,7 +274,7 @@ public class MainActivity extends Activity {
 
         connectOpenButton = new Button(this);
         connectOpenButton.setAllCaps(false);
-        connectOpenButton.setText("Verify & Open Studio");
+        connectOpenButton.setText("Connect & Open Studio");
         connectOpenButton.setTextColor(Color.parseColor("#04130D"));
         connectOpenButton.setTypeface(Typeface.DEFAULT_BOLD);
         connectOpenButton.setBackground(roundedRect("#10B981", "#059669", 10));
@@ -286,7 +298,7 @@ public class MainActivity extends Activity {
 
         verifyOnlyButton = new Button(this);
         verifyOnlyButton.setAllCaps(false);
-        verifyOnlyButton.setText("Test Connection");
+        verifyOnlyButton.setText("Verify Server");
         verifyOnlyButton.setTextColor(Color.parseColor("#E5E7EB"));
         verifyOnlyButton.setBackground(roundedRect("#1F2937", "#374151", 10));
         verifyOnlyButton.setOnClickListener(v ->
@@ -301,14 +313,14 @@ public class MainActivity extends Activity {
 
         Button clearSavedBtn = new Button(this);
         clearSavedBtn.setAllCaps(false);
-        clearSavedBtn.setText("Reset Saved");
+        clearSavedBtn.setText("Forget Saved URL");
         clearSavedBtn.setTextColor(Color.parseColor("#FCA5A5"));
         clearSavedBtn.setBackground(roundedRect("#1F1519", "#7F1D1D", 10));
         clearSavedBtn.setOnClickListener(v -> {
             prefs.edit().remove(KEY_SAVED_URL).remove(KEY_ALLOW_HTTP).apply();
             verifiedOrigin = null;
             urlInput.setText("");
-            setStatusMessage("Saved configuration cleared", "Enter a MARI BASE URL to connect.", "#9CA3AF");
+            setStatusMessage("Saved configuration cleared", "Saved address cleared. Enter your running backend address.", "#9CA3AF");
         });
         LinearLayout.LayoutParams halfLp2 = new LinearLayout.LayoutParams(
                 0,
@@ -686,8 +698,8 @@ public class MainActivity extends Activity {
                     connectOpenButton.setEnabled(true);
                     verifyOnlyButton.setEnabled(true);
                     setStatusMessage(
-                            "Verification failed",
-                            ex.getMessage() != null ? ex.getMessage() : "Unable to reach MARI BASE server.",
+                            "Could not connect",
+                            explainConnectionFailure(normalizedOrigin, ex),
                             "#F87171"
                     );
                     if (studioScreen.getVisibility() == View.VISIBLE) {
@@ -696,6 +708,31 @@ public class MainActivity extends Activity {
                 });
             }
         });
+    }
+
+    private String explainConnectionFailure(String origin, Exception error) {
+        String detail = error != null && error.getMessage() != null
+                ? error.getMessage() : "The backend did not respond.";
+        String lower = detail.toLowerCase(Locale.US);
+        String hostHelp = "";
+        try {
+            URI uri = new URI(origin);
+            String host = uri.getHost() != null ? uri.getHost().toLowerCase(Locale.US) : "";
+            if ("localhost".equals(host) || "127.0.0.1".equals(host)) {
+                hostHelp = " You entered localhost, which points to this Android phone. If the backend runs on another device, enter that device's LAN IP or a deployed HTTPS URL.";
+            } else if ("10.0.2.2".equals(host)) {
+                hostHelp = " 10.0.2.2 is for the Android emulator, not a normal physical phone.";
+            }
+        } catch (Exception ignored) {
+            // Keep the original connection diagnostic.
+        }
+        if (lower.contains("timed out") || lower.contains("timeout")) {
+            return "The server did not respond in time. Check that MARI BASE is running, the IP and port are correct, and both devices can reach each other." + hostHelp + " Technical detail: " + detail;
+        }
+        if (lower.contains("refused") || lower.contains("failed to connect") || lower.contains("unable to resolve") || lower.contains("unknown host")) {
+            return "No reachable MARI BASE server was found at this address. Start/deploy the backend, check the address and port, and make sure the server accepts LAN connections." + hostHelp + " Technical detail: " + detail;
+        }
+        return "The server check failed. Confirm the backend is running and reachable from this phone, then retry." + hostHelp + " Technical detail: " + detail;
     }
 
     private String validateAndNormalizeOrigin(String rawInput, boolean allowCleartextHttp) {
