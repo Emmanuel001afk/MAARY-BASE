@@ -68,7 +68,7 @@ All project-scoped endpoints accept either a `:projectRef` slug (e.g. `acme-api`
 ## 4. Database, SQL, RLS, Migrations & Data API
 
 - `GET|POST /v1/projects/:projectRef/database/tables`
-- `PATCH /v1/projects/:projectRef/database/tables/:tableName` — `add_column` (with optional FK `references`), `drop_column`, `rename_column`, `create_index`, `drop_index`, `toggle_rls`.
+- `PATCH /v1/projects/:projectRef/database/tables/:tableName` — `add_column` (with optional FK `references`), `drop_column`, `rename_column`, `alter_column` (change `type`, set/drop `defaultValue`, toggle `notNull`), `rename_table` (`toName`), `create_index`, `drop_index`, `toggle_rls`.
 - `DELETE /v1/projects/:projectRef/database/tables/:tableName`
 - `POST /v1/projects/:projectRef/database/tables/:tableName/rls`
 - `GET /v1/projects/:projectRef/database/diagnostics` — Least-privilege role verification and relation sizes.
@@ -78,7 +78,7 @@ All project-scoped endpoints accept either a `:projectRef` slug (e.g. `acme-api`
 - `PATCH|DELETE /v1/projects/:projectRef/database/queries/:queryId` — rename/update/pin (`favorite`), or delete; `PATCH` with `{ "markRun": true }` records an execution.
 - `GET|POST /v1/projects/:projectRef/database/migrations` & `POST .../database/migrations/:version/rollback`
 - `GET /v1/projects/:projectRef/openapi.json`
-- `GET|POST|PATCH|DELETE /v1/projects/:projectRef/rest/:table`
+- `GET|POST|PATCH|DELETE /v1/projects/:projectRef/rest/:table` — PostgREST-style filters (`col=eq.value`, `gt`, `lt`, `like`, `in`, …), `order=col.asc|desc`, `limit`/`offset` pagination, `select=col,col` projection, relationship embedding, and `count=exact` for filtered totals.
 - `POST /v1/projects/:projectRef/rpc/:fn`
 
 ---

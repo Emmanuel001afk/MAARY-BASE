@@ -49,6 +49,7 @@ export const state = {
     orderBy: "",
     orderDir: "desc",
     rows: [],
+    total: null,
   },
   visualColumns: [
     { name: "id", type: "uuid", primaryKey: true, nullable: false, defaultValue: "gen_random_uuid()" },

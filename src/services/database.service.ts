@@ -118,6 +118,19 @@ function validateColumnType(rawType: string): string {
   throw new ValidationError(`Unsupported or unsafe SQL column type '${rawType}'.`);
 }
 
+const SAFE_DEFAULT_REGEX =
+  /^(gen_random_uuid\(\)|now\(\)|current_timestamp|true|false|-?\d+(\.\d+)?|'[a-zA-Z0-9_ -]*'::[a-z0-9_]+|'[a-zA-Z0-9_ -]*'|\{\}'::jsonb|\[\]'::jsonb)$/i;
+
+function assertSafeColumnDefault(rawDefault: string): string {
+  const def = rawDefault.trim();
+  if (!SAFE_DEFAULT_REGEX.test(def)) {
+    throw new ValidationError(
+      `Unsafe or unsupported column default expression '${def}'.`
+    );
+  }
+  return def;
+}
+
 export async function ensureProjectSchemaPrivilegesAndTriggers(
   project: ProjectRecord,
   client?: DatabaseClient
@@ -576,6 +589,18 @@ export async function alterProjectTable(
         toName: string;
       }
     | {
+        action: "alter_column";
+        columnName: string;
+        type?: string;
+        defaultValue?: string;
+        dropDefault?: boolean;
+        notNull?: boolean;
+      }
+    | {
+        action: "rename_table";
+        toName: string;
+      }
+    | {
         action: "create_index";
         indexName: string;
         columns: string[];
@@ -608,18 +633,7 @@ export async function alterProjectTable(
     if (col.notNull) parts.push("NOT NULL");
     if (col.unique) parts.push("UNIQUE");
     if (col.defaultValue !== undefined && col.defaultValue !== "") {
-      const def = col.defaultValue.trim();
-      if (
-        /^(gen_random_uuid\(\)|now\(\)|current_timestamp|true|false|-?\d+(\.\d+)?|'[a-zA-Z0-9_ -]*'::[a-z0-9_]+|'[a-zA-Z0-9_ -]*'|\{\}'::jsonb|\[\]'::jsonb)$/i.test(
-          def
-        )
-      ) {
-        parts.push(`DEFAULT ${def}`);
-      } else {
-        throw new ValidationError(
-          `Unsafe or unsupported column default expression '${def}'.`
-        );
-      }
+      parts.push(`DEFAULT ${assertSafeColumnDefault(col.defaultValue)}`);
     }
     if (col.references) {
       assertValidIdentifier(col.references.table, "referenced table");
@@ -647,6 +661,67 @@ export async function alterProjectTable(
     await pool.query(
       `ALTER TABLE ${schemaIdent}.${tableIdent} RENAME COLUMN ${quoteIdent(operation.fromName)} TO ${quoteIdent(operation.toName)}`
     );
+  } else if (operation.action === "alter_column") {
+    assertValidIdentifier(operation.columnName, "column");
+    const colIdent = quoteIdent(operation.columnName);
+    const statements: string[] = [];
+    if (operation.type !== undefined && operation.type.trim() !== "") {
+      const colType = validateColumnType(operation.type);
+      statements.push(
+        `ALTER TABLE ${schemaIdent}.${tableIdent} ALTER COLUMN ${colIdent} TYPE ${colType} USING ${colIdent}::${colType}`
+      );
+    }
+    if (operation.dropDefault) {
+      statements.push(
+        `ALTER TABLE ${schemaIdent}.${tableIdent} ALTER COLUMN ${colIdent} DROP DEFAULT`
+      );
+    } else if (
+      operation.defaultValue !== undefined &&
+      operation.defaultValue.trim() !== ""
+    ) {
+      const def = assertSafeColumnDefault(operation.defaultValue);
+      statements.push(
+        `ALTER TABLE ${schemaIdent}.${tableIdent} ALTER COLUMN ${colIdent} SET DEFAULT ${def}`
+      );
+    }
+    if (operation.notNull === true) {
+      statements.push(
+        `ALTER TABLE ${schemaIdent}.${tableIdent} ALTER COLUMN ${colIdent} SET NOT NULL`
+      );
+    } else if (operation.notNull === false) {
+      statements.push(
+        `ALTER TABLE ${schemaIdent}.${tableIdent} ALTER COLUMN ${colIdent} DROP NOT NULL`
+      );
+    }
+    if (!statements.length) {
+      throw new ValidationError(
+        "alter_column requires at least one of 'type', 'defaultValue', 'dropDefault', or 'notNull'."
+      );
+    }
+    await withTransaction(async (client) => {
+      for (const statement of statements) {
+        await client.query(statement);
+      }
+      await ensureProjectSchemaPrivilegesAndTriggers(project, client);
+    });
+  } else if (operation.action === "rename_table") {
+    const toName = assertValidIdentifier(operation.toName, "table");
+    if (toName === tableName) {
+      throw new ValidationError("New table name must differ from the current name.");
+    }
+    const clash = await pool.query(
+      `SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2`,
+      [project.schema_name, toName]
+    );
+    if (clash.rowCount) {
+      throw new ConflictError(`A table named '${toName}' already exists in this schema.`);
+    }
+    await withTransaction(async (client) => {
+      await client.query(
+        `ALTER TABLE ${schemaIdent}.${tableIdent} RENAME TO ${quoteIdent(toName)}`
+      );
+      await ensureProjectSchemaPrivilegesAndTriggers(project, client);
+    });
   } else if (operation.action === "create_index") {
     assertValidIdentifier(operation.indexName, "index");
     if (!operation.columns.length) {
@@ -683,17 +758,20 @@ export async function alterProjectTable(
     });
   }
 
+  const renamedTo =
+    operation.action === "rename_table" ? operation.toName : null;
+
   await recordAuditEvent({
     projectId: project.id,
     actorType: actorId ? "user" : "system",
     actorId: actorId ?? null,
     action: `database.table.${operation.action}`,
     resourceType: "table",
-    resourceId: tableName,
+    resourceId: renamedTo ? `${tableName} -> ${renamedTo}` : tableName,
     metadata: operation as unknown as Record<string, unknown>,
   });
 
-  return getTableSchema(project, tableName);
+  return getTableSchema(project, renamedTo ?? tableName);
 }
 
 export async function dropProjectTable(

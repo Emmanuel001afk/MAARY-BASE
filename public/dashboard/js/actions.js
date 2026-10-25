@@ -203,7 +203,7 @@ export async function handleAction(action, element) {
       await copyText($("credential-value").textContent || "");
       break;
     case "focus-create-table": focusElement("tbl-name", "create-table-disclosure"); break;
-    case "focus-create-bucket": focusElement("bucket-name", "create-bucket-disclosure"); break;
+    case "focus-create-bucket": activateLocalTab("storage-buckets"); focusElement("bucket-name", "create-bucket-disclosure"); break;
     case "focus-deploy-function": activateLocalTab("functions"); focusElement("fn-slug"); break;
     case "focus-create-key": activateLocalTab("keys"); focusElement("key-name"); break;
     case "create-backup-focus": activateLocalTab("backups-main"); focusElement("backup-name-input"); break;
@@ -444,6 +444,7 @@ export async function handleAction(action, element) {
       break;
     }
     case "prefill-api-test":
+      activateLocalTab("api-explorer");
       $("api-test-method").value = element.dataset.method || "GET";
       $("api-test-path").value = element.dataset.path || "/rest/";
       focusElement("api-test-path");
@@ -805,6 +806,52 @@ const submitHandlers = {
     });
     $("alter-rename-col-form").reset();
     showToast("Column renamed.");
+    await loadPage("database");
+  },
+  "alter-rename-table-form": async () => {
+    if (!state.activeTable) throw new Error("Select a table first.");
+    const toName = $("alt-table-to").value.trim();
+    const confirmed = await confirmAction({
+      title: `Rename ${state.activeTable} to ${toName}?`,
+      message: "Rows, indexes, and RLS policies move with the table. REST endpoints immediately switch to the new name.",
+      confirmLabel: "Rename table",
+      danger: false,
+    });
+    if (!confirmed) return;
+    await api(projectApi(`/database/tables/${encodeURIComponent(state.activeTable)}`), {
+      method: "PATCH",
+      body: { action: "rename_table", toName },
+    });
+    state.activeTable = toName;
+    showToast(`Table renamed to ${toName}.`);
+    await loadPage("database");
+  },
+  "alter-column-form": async () => {
+    if (!state.activeTable) throw new Error("Select a table first.");
+    const columnName = $("alt2-col-name").value;
+    if (!columnName) throw new Error("Choose the column to alter.");
+    const type = $("alt2-col-type").value;
+    const nullable = $("alt2-col-nullable").value;
+    const defaultValue = $("alt2-col-default").value.trim();
+    const dropDefault = $("alt2-col-drop-default").checked;
+    if (!type && !defaultValue && !dropDefault && nullable === "") {
+      throw new Error("Pick at least one change: type, default, nullability, or drop-default.");
+    }
+    if (defaultValue && dropDefault) throw new Error("Set a new default or drop it — not both.");
+    await api(projectApi(`/database/tables/${encodeURIComponent(state.activeTable)}`), {
+      method: "PATCH",
+      body: {
+        action: "alter_column",
+        columnName,
+        ...(type ? { type } : {}),
+        ...(defaultValue ? { defaultValue } : {}),
+        ...(dropDefault ? { dropDefault: true } : {}),
+        ...(nullable !== "" ? { notNull: nullable === "true" } : {}),
+      },
+      timeout: 60_000,
+    });
+    $("alter-column-form").reset();
+    showToast(`Column ${columnName} altered.`);
     await loadPage("database");
   },
   "alter-create-index-form": async () => {
