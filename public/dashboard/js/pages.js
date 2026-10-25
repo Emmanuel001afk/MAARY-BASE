@@ -21,7 +21,7 @@ export const PAGE_META = {
   },
   sql: {
     group: "Build", title: "SQL Editor & Row-Level Security", icon: "terminal",
-    description: "Run scoped PostgreSQL queries, simulate client roles and auth.uid(), and author RLS policies.",
+    description: "Run scoped PostgreSQL queries, build a shared saved-query library, simulate client roles and auth.uid(), and author RLS policies.",
     actions: `<button class="btn btn-secondary btn-sm" type="button" data-nav="migrations">${icon("layers")}<span>Migrations</span></button>`,
   },
   migrations: {
@@ -85,7 +85,7 @@ export const COMMAND_ITEMS = [
   { group: "Workspace", label: "Project Overview", detail: "Health probes, connection URLs, environments", icon: "home", tab: "overview", shortcut: "G O" },
   { group: "Workspace", label: "Workspaces & Organizations", detail: "Multi-project teams & RBAC", icon: "users", tab: "organizations", shortcut: "G W" },
   { group: "Build", label: "Table Editor", detail: "Visual columns, alter schema, row browser", icon: "database", tab: "database", shortcut: "G D" },
-  { group: "Build", label: "SQL & RLS Policies", detail: "Query runner & Row-Level Security", icon: "terminal", tab: "sql", shortcut: "G S" },
+  { group: "Build", label: "SQL & RLS Policies", detail: "Query runner, saved-query library & Row-Level Security", icon: "terminal", tab: "sql", shortcut: "G S" },
   { group: "Build", label: "Schema Migrations", detail: "Checksummed up/down migrations", icon: "layers", tab: "migrations", shortcut: "G M" },
   { group: "Build", label: "API & Live Explorer", detail: "Interactive REST/RPC tester & OpenAPI", icon: "globe", tab: "api", shortcut: "G P" },
   { group: "Build", label: "Authentication & Users", detail: "Users, sessions, OAuth, recovery", icon: "lock", tab: "auth", shortcut: "G A" },
@@ -131,8 +131,18 @@ export function errorState(error, retryAction = "refresh-page") {
   return `<div class="error-box" role="alert"><div class="error-box-icon">${icon("alert")}</div><div><h3>Couldn’t load this section</h3><p>${esc(error?.message || "Check server connectivity and your permissions.")}</p></div><button class="btn btn-secondary btn-sm" type="button" data-action="${esc(retryAction)}">${icon("refresh")}<span>Retry</span></button></div>`;
 }
 
-export function table(headers, rowsHtml) {
-  return `<div class="table-wrap"><table class="data-table"><thead><tr>${headers.map((header) => `<th scope="col">${esc(header)}</th>`).join("")}</tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
+export function table(headers, rowsHtml, options = {}) {
+  const wrapClass = options.scroll ? "table-wrap grid-scroll" : "table-wrap";
+  const headHtml = headers
+    .map((header) => {
+      if (header && typeof header === "object") {
+        const sub = header.sub ? `<span class="col-type">${esc(header.sub)}</span>` : "";
+        return `<th scope="col">${esc(header.label)}${sub}</th>`;
+      }
+      return `<th scope="col">${esc(header)}</th>`;
+    })
+    .join("");
+  return `<div class="${wrapClass}"><table class="data-table"><thead><tr>${headHtml}</tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
 }
 
 function formatCell(value) {
@@ -250,7 +260,11 @@ const templates = {
         <section class="card">
           <header class="card-header">
             <div class="card-title"><span class="card-title-icon">${icon("file")}</span><div><h2>Data Browser <span id="active-table-label" class="mono subtle"></span></h2><p id="active-table-details">Select a table to filter, sort, insert, edit, or delete rows.</p></div></div>
-            <div class="card-header-actions"><button class="btn btn-secondary btn-sm" type="button" data-action="refresh-rows">${icon("refresh")}<span>Reload</span></button></div>
+            <div class="card-header-actions">
+              <button class="btn btn-secondary btn-sm" type="button" data-action="export-rows-csv">${icon("download")}<span>CSV</span></button>
+              <button class="btn btn-secondary btn-sm" type="button" data-action="refresh-rows">${icon("refresh")}<span>Reload</span></button>
+              <button class="btn btn-primary btn-sm" type="button" data-action="open-insert-row">${icon("plus")}<span>Insert row</span></button>
+            </div>
           </header>
           <form id="row-filter-form" class="toolbar-inline">
             <div class="field"><label for="row-filter-input">Filter (e.g. <span class="mono">status=eq.active</span>)</label><input id="row-filter-input" class="mono" type="text" placeholder="column=eq.value"></div>
@@ -269,13 +283,18 @@ const templates = {
             </div>
           </div>
           <div class="card-divider-form">
-            <form id="insert-row-form" class="stack-form">
-              <div class="label-row"><label for="row-json-input">Insert JSON row</label><span class="field-hint">Single JSON object</span></div>
-              <div class="inline-code-submit">
-                <textarea id="row-json-input" class="code-input" rows="2" placeholder='{"title": "Launch MARRY BASE", "completed": false}' required></textarea>
-                <button class="btn btn-primary" type="submit">Insert row</button>
+            <details class="disclosure">
+              <summary><span>${icon("terminal")} Advanced: insert raw JSON row</span><span class="subtle">Single object</span></summary>
+              <div class="disclosure-body">
+                <form id="insert-row-form" class="stack-form">
+                  <div class="label-row"><label for="row-json-input">Row JSON payload</label><span class="field-hint">POST to the generated REST endpoint</span></div>
+                  <div class="inline-code-submit">
+                    <textarea id="row-json-input" class="code-input" rows="2" placeholder='{"title": "Launch MARRY BASE", "completed": false}' required></textarea>
+                    <button class="btn btn-primary" type="submit">Insert row</button>
+                  </div>
+                </form>
               </div>
-            </form>
+            </details>
           </div>
         </section>
 
@@ -316,36 +335,52 @@ const templates = {
     </div>`,
 
   sql: () => `${pageHeader("sql")}
-    <div class="stack">
-      <section class="card">
-        <header class="card-header">
-          <div class="card-title"><span class="card-title-icon">${icon("terminal")}</span><div><h2>SQL Workbench</h2><p>Scoped to <code class="mono">${esc(state.activeProject.schema_name)}</code> with statement timeouts and destructive-query safeguards.</p></div></div>
-          <div class="card-header-actions"><select id="sql-history" class="compact-select" aria-label="Recent SQL queries"><option value="">Recent queries…</option></select></div>
-        </header>
-        <form id="sql-form" class="card-body stack-form">
-          <div class="editor-options">
-            <div class="field"><label for="sql-role-select">Execution role</label><select id="sql-role-select"><option value="service_role">service_role (owner — bypasses RLS)</option><option value="authenticated">authenticated (enforces RLS)</option><option value="anon">anon (enforces RLS)</option></select></div>
-            <div class="field"><label for="sql-user-id">Simulated auth.uid()</label><input id="sql-user-id" class="mono" type="text" placeholder="Optional UUID for RLS testing"></div>
-            <div class="field"><label for="sql-destructive">Destructive DDL</label><select id="sql-destructive"><option value="false">Block DROP / TRUNCATE</option><option value="true">Allow destructive SQL</option></select></div>
-          </div>
-          <div class="field"><label for="sql-editor-input">SQL query</label><textarea id="sql-editor-input" class="code-input code-lg" rows="7" spellcheck="false">SELECT current_schema() AS project_schema, current_user AS db_role, now() AS executed_at;</textarea></div>
-          <div class="editor-footer">
-            <span class="subtle">Press <kbd>⌘</kbd> + <kbd>Enter</kbd> to run</span>
-            <div class="button-row"><button class="btn btn-ghost btn-sm" type="button" data-action="clear-sql">Clear</button><button class="btn btn-primary" type="submit">${icon("play")}<span>Run query</span></button></div>
-          </div>
-        </form>
-        <div id="sql-result-box" class="sql-results"></div>
-      </section>
-      <div class="grid-2">
-        ${card("Create RLS Policy", `<form id="create-policy-form" class="stack-form">
-          <div class="field-row"><div class="field"><label for="pol-table">Target table</label><select id="pol-table" required></select></div><div class="field"><label for="pol-cmd">Command</label><select id="pol-cmd"><option value="ALL">ALL</option><option value="SELECT">SELECT</option><option value="INSERT">INSERT</option><option value="UPDATE">UPDATE</option><option value="DELETE">DELETE</option></select></div></div>
-          <div class="field"><label for="pol-name">Policy name</label><input id="pol-name" class="mono" type="text" placeholder="users_manage_own_rows" required></div>
-          <div class="field"><label for="pol-using">USING expression</label><input id="pol-using" class="mono" type="text" value="auth.uid() = user_id"></div>
-          <div class="field"><label for="pol-check">WITH CHECK expression</label><input id="pol-check" class="mono" type="text" placeholder="Optional — defaults to USING expression for writes"></div>
-          <label class="checkbox-field"><input id="pol-enable-rls" type="checkbox" checked><span>Ensure FORCE ROW LEVEL SECURITY is enabled on target table</span></label>
-          <button class="btn btn-primary" type="submit">Create RLS policy</button>
-        </form>`, { subtitle: "Enforced natively by PostgreSQL under role_<slug>_rls.", iconName: "shield" })}
-        ${card("Active RLS Policies", `<div id="rls-policies-list">${loadingState("Loading RLS policies…")}</div>`, { subtitle: "Policies currently active across project tables.", iconName: "lock", flush: true })}
+    <div class="grid-sidebar-reverse">
+      <div class="stack">
+        ${card("Saved Queries", `<div id="saved-queries-list">${loadingState("Loading saved queries…")}</div>`, {
+          subtitle: "Server-stored SQL library shared with everyone who has access to this project.",
+          iconName: "save",
+          actions: `<button class="btn btn-secondary btn-sm" type="button" data-action="open-save-query">${icon("plus")}<span>Save current</span></button>`,
+          flush: true,
+        })}
+        ${card("Query Shortcuts", `<div class="quick-actions">
+          <button class="quick-action" type="button" data-action="sql-snippet" data-sql="SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() ORDER BY 1;">${icon("database")}<div><strong>List tables</strong><span>All relations in this project schema</span></div></button>
+          <button class="quick-action" type="button" data-action="sql-snippet" data-sql="SELECT schemaname AS table_schema, tablename, policyname, cmd, roles, qual FROM pg_policies WHERE schemaname = current_schema() ORDER BY tablename;">${icon("shield")}<div><strong>Inspect policies</strong><span>pg_policies for the active schema</span></div></button>
+          <button class="quick-action" type="button" data-action="sql-snippet" data-sql="SELECT relname AS relation, pg_size_pretty(pg_total_relation_size(quote_ident(current_schema()) || '.' || quote_ident(relname))) AS total_size FROM pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC;">${icon("activity")}<div><strong>Table sizes</strong><span>Storage footprint per relation</span></div></button>
+          <button class="quick-action" type="button" data-action="sql-snippet" data-sql="SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = current_schema() ORDER BY tablename, indexname;">${icon("layers")}<div><strong>List indexes</strong><span>Every index in the schema</span></div></button>
+        </div>`, { subtitle: "Load a common introspection query into the workbench.", iconName: "sparkles" })}
+      </div>
+      <div class="stack">
+        <section class="card">
+          <header class="card-header">
+            <div class="card-title"><span class="card-title-icon">${icon("terminal")}</span><div><h2>SQL Workbench</h2><p>Scoped to <code class="mono">${esc(state.activeProject.schema_name)}</code> with statement timeouts and destructive-query safeguards.</p></div></div>
+            <div class="card-header-actions"><select id="sql-history" class="compact-select" aria-label="Recent SQL queries"><option value="">Recent queries…</option></select></div>
+          </header>
+          <form id="sql-form" class="card-body stack-form">
+            <div class="editor-options">
+              <div class="field"><label for="sql-role-select">Execution role</label><select id="sql-role-select"><option value="service_role">service_role (owner — bypasses RLS)</option><option value="authenticated">authenticated (enforces RLS)</option><option value="anon">anon (enforces RLS)</option></select></div>
+              <div class="field"><label for="sql-user-id">Simulated auth.uid()</label><input id="sql-user-id" class="mono" type="text" placeholder="Optional UUID for RLS testing"></div>
+              <div class="field"><label for="sql-destructive">Destructive DDL</label><select id="sql-destructive"><option value="false">Block DROP / TRUNCATE</option><option value="true">Allow destructive SQL</option></select></div>
+            </div>
+            <div class="field"><label for="sql-editor-input">SQL query</label><textarea id="sql-editor-input" class="code-input code-lg" rows="9" spellcheck="false">SELECT current_schema() AS project_schema, current_user AS db_role, now() AS executed_at;</textarea></div>
+            <div class="editor-footer">
+              <span class="subtle">Press <kbd>⌘</kbd> + <kbd>Enter</kbd> to run · <span id="sql-active-query-label">unsaved query</span></span>
+              <div class="button-row"><button class="btn btn-ghost btn-sm" type="button" data-action="clear-sql">Clear</button><button class="btn btn-secondary btn-sm" type="button" data-action="open-save-query">${icon("save")}<span>Save query</span></button><button class="btn btn-primary" type="submit">${icon("play")}<span>Run query</span></button></div>
+            </div>
+          </form>
+          <div id="sql-result-box" class="sql-results"></div>
+        </section>
+        <div class="grid-2">
+          ${card("Create RLS Policy", `<form id="create-policy-form" class="stack-form">
+            <div class="field-row"><div class="field"><label for="pol-table">Target table</label><select id="pol-table" required></select></div><div class="field"><label for="pol-cmd">Command</label><select id="pol-cmd"><option value="ALL">ALL</option><option value="SELECT">SELECT</option><option value="INSERT">INSERT</option><option value="UPDATE">UPDATE</option><option value="DELETE">DELETE</option></select></div></div>
+            <div class="field"><label for="pol-name">Policy name</label><input id="pol-name" class="mono" type="text" placeholder="users_manage_own_rows" required></div>
+            <div class="field"><label for="pol-using">USING expression</label><input id="pol-using" class="mono" type="text" value="auth.uid() = user_id"></div>
+            <div class="field"><label for="pol-check">WITH CHECK expression</label><input id="pol-check" class="mono" type="text" placeholder="Optional — defaults to USING expression for writes"></div>
+            <label class="checkbox-field"><input id="pol-enable-rls" type="checkbox" checked><span>Ensure FORCE ROW LEVEL SECURITY is enabled on target table</span></label>
+            <button class="btn btn-primary" type="submit">Create RLS policy</button>
+          </form>`, { subtitle: "Enforced natively by PostgreSQL under role_<slug>_rls.", iconName: "shield" })}
+          ${card("Active RLS Policies", `<div id="rls-policies-list">${loadingState("Loading RLS policies…")}</div>`, { subtitle: "Policies currently active across project tables.", iconName: "lock", flush: true })}
+        </div>
       </div>
     </div>`,
 
@@ -387,13 +422,15 @@ const templates = {
   },
 
   auth: () => `${pageHeader("auth")}
+    <div class="subnav-layout">
     <div class="local-tabs" role="tablist" aria-label="Authentication sections">
-      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="auth-users">Users</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-sessions">Active Sessions</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-policies">Policies &amp; OAuth</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-tester">Auth Flow &amp; Recovery Tester</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-operator">Operator Account</button>
+      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="auth-users">${icon("users")}Users</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-sessions">${icon("clock")}Active Sessions</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-policies">${icon("shield")}Policies &amp; OAuth</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-tester">${icon("play")}Auth Flow &amp; Recovery Tester</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="auth-operator">${icon("key")}Operator Account</button>
     </div>
+    <div class="subnav-content">
 
     <div id="local-auth-users" class="local-panel">
       <div class="grid-sidebar-reverse">
@@ -461,6 +498,8 @@ const templates = {
           <button class="btn btn-primary" type="submit">Rotate operator password</button>
         </form>`, { subtitle: "Revokes other active Studio sessions for your account.", iconName: "shield" })}
       </div>
+    </div>
+    </div>
     </div>`,
 
   storage: () => `${pageHeader("storage")}
@@ -541,11 +580,13 @@ const templates = {
     </div>`,
 
   functions: () => `${pageHeader("functions")}
+    <div class="subnav-layout">
     <div class="local-tabs" role="tablist" aria-label="Compute modules">
-      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="functions">Server Functions</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="jobs">Background Jobs</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="schedules">Recurring Schedules</button>
+      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="functions">${icon("function")}Server Functions</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="jobs">${icon("clock")}Background Jobs</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="schedules">${icon("refresh")}Recurring Schedules</button>
     </div>
+    <div class="subnav-content">
 
     <div id="local-functions" class="local-panel">
       <div class="grid-2">
@@ -591,6 +632,8 @@ const templates = {
         </form>`, { subtitle: "Automatically enqueues durable jobs on schedule.", iconName: "plus" })}
         ${card("Configured Schedules", `<div id="schedules-list">${loadingState("Loading schedules…")}</div>`, { subtitle: "Active recurring tasks for this project.", iconName: "clock", flush: true })}
       </div>
+    </div>
+    </div>
     </div>`,
 
   logs: () => `${pageHeader("logs")}
@@ -604,11 +647,13 @@ const templates = {
     </div>`,
 
   backups: () => `${pageHeader("backups")}
+    <div class="subnav-layout">
     <div class="local-tabs" role="tablist" aria-label="Backups and project settings">
-      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="backups-main">Snapshots &amp; Recovery</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="project-settings">Project Settings &amp; Quotas</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="android-companion">Android Companion &amp; APK</button>
+      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="backups-main">${icon("storage")}Snapshots &amp; Recovery</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="project-settings">${icon("settings")}Project Settings &amp; Quotas</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="android-companion">${icon("sparkles")}Android Companion &amp; APK</button>
     </div>
+    <div class="subnav-content">
 
     <div id="local-backups-main" class="local-panel">
       <div class="grid-sidebar-reverse">
@@ -644,18 +689,22 @@ const templates = {
         ${card("Android Companion & Build Pipeline Status", `<div id="apk-status-box">${loadingState("Inspecting compiled APK artifact and Gradle toolchain…")}</div>`, { subtitle: "Genuine Android Gradle pipeline (android/) + apksigner verification.", iconName: "sparkles" })}
         ${card("Trigger Local Gradle Build", `<form id="build-apk-form" class="stack-form">
           <div class="field"><label for="apk-server-url">Default MARRY BASE URL</label><input id="apk-server-url" class="mono" type="url" value="${esc(window.location.origin)}" required></div>
-          <div class="field-row"><div class="field"><label for="apk-version-name">Version name</label><input id="apk-version-name" class="mono" type="text" value="1.1.0" required></div><div class="field"><label for="apk-version-code">Version code</label><input id="apk-version-code" type="number" min="1" value="2" required></div></div>
+          <div class="field-row"><div class="field"><label for="apk-version-name">Version name</label><input id="apk-version-name" class="mono" type="text" value="1.2.0" required></div><div class="field"><label for="apk-version-code">Version code</label><input id="apk-version-code" type="number" min="1" value="3" required></div></div>
           <button class="btn btn-primary" type="submit">Compile APK with Gradle</button>
         </form><div id="apk-build-result" class="top-gap"></div>`, { subtitle: "Requires JDK 17 + Android SDK + Gradle on the host, or builds automatically in GitHub Actions CI.", iconName: "download" })}
       </div>
+    </div>
+    </div>
     </div>`,
 
   security: () => `${pageHeader("security")}
+    <div class="subnav-layout">
     <div class="local-tabs" role="tablist" aria-label="Security sections">
-      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="keys">API Keys</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="secrets">Encrypted Secrets</button>
-      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="members">Project Team &amp; RBAC</button>
+      <button class="local-tab active" type="button" role="tab" aria-selected="true" data-local-tab="keys">${icon("key")}API Keys</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="secrets">${icon("lock")}Encrypted Secrets</button>
+      <button class="local-tab" type="button" role="tab" aria-selected="false" data-local-tab="members">${icon("users")}Project Team &amp; RBAC</button>
     </div>
+    <div class="subnav-content">
 
     <div id="local-keys" class="local-panel">
       <div class="grid-sidebar-reverse">
@@ -690,6 +739,8 @@ const templates = {
         </form>`, { subtitle: "Operators in the project's parent Workspace also inherit access automatically.", iconName: "users" })}
         ${card("Direct Project Members", `<div id="members-list">${loadingState("Loading members…")}</div>`, { subtitle: "Role-based control-plane access for this project.", iconName: "shield", flush: true })}
       </div>
+    </div>
+    </div>
     </div>`,
 
   platform: () => `${pageHeader("platform")}
@@ -1000,8 +1051,13 @@ export async function browseTable(tableName, knownVersion = null) {
       return;
     }
     const columns = [...new Set([...(tableInfo?.columns?.map((c) => c.name) || []), ...rows.flatMap((row) => Object.keys(row))])];
-    const body = rows.map((row, idx) => `<tr>${columns.map((column) => `<td>${formatCell(row[column])}</td>`).join("")}<td>${pkCol && row[pkCol] !== undefined ? `<div class="cell-actions"><button class="btn btn-secondary btn-sm" type="button" data-action="open-edit-row" data-idx="${idx}" data-pk-col="${esc(pkCol)}">Edit</button><button class="icon-btn btn-sm" type="button" data-action="delete-row" data-pk-col="${esc(pkCol)}" data-pk-val="${esc(row[pkCol])}" aria-label="Delete row">${icon("trash")}</button></div>` : ""}</td></tr>`).join("");
-    $("table-rows-container").innerHTML = table([...columns, ""], body);
+    const columnMeta = new Map((tableInfo?.columns || []).map((col) => [col.name, col]));
+    const headers = columns.map((column) => {
+      const meta = columnMeta.get(column);
+      return meta ? { label: column, sub: meta.dataType || meta.udtName || "" } : column;
+    });
+    const body = rows.map((row, idx) => `<tr>${columns.map((column) => `<td>${formatCell(row[column])}</td>`).join("")}<td><div class="cell-actions"><button class="icon-btn btn-sm" type="button" data-action="copy-row-json" data-idx="${idx}" title="Copy row as JSON" aria-label="Copy row ${idx} as JSON">${icon("copy")}</button>${pkCol && row[pkCol] !== undefined ? `<button class="btn btn-secondary btn-sm" type="button" data-action="open-edit-row" data-idx="${idx}" data-pk-col="${esc(pkCol)}">Edit</button><button class="icon-btn btn-sm" type="button" data-action="delete-row" data-pk-col="${esc(pkCol)}" data-pk-val="${esc(row[pkCol])}" title="Delete row" aria-label="Delete row">${icon("trash")}</button>` : ""}</div></td></tr>`).join("");
+    $("table-rows-container").innerHTML = table([...headers, ""], body, { scroll: true });
   } catch (error) {
     if ($("table-rows-container")) $("table-rows-container").innerHTML = errorState(error, "refresh-rows");
   }
@@ -1021,10 +1077,20 @@ function renderPolicies() {
 }
 
 async function loadSql(version, slug) {
-  const response = await api(`/v1/projects/${encodeURIComponent(slug)}/database/tables`);
+  const base = `/v1/projects/${encodeURIComponent(slug)}`;
+  const [response, queriesResponse] = await Promise.all([
+    api(`${base}/database/tables`),
+    api(`${base}/database/queries`),
+  ]);
   if (!isCurrent("sql", version, slug)) return;
   state.tables = response.tables || [];
+  state.savedQueries = queriesResponse.queries || [];
+  if (state.activeSavedQueryId && !state.savedQueries.some((q) => q.id === state.activeSavedQueryId)) {
+    state.activeSavedQueryId = null;
+  }
   renderPolicies();
+  renderSavedQueries();
+  updateSavedQueryLabel();
 }
 
 async function loadMigrations(version, slug) {
@@ -1380,9 +1446,90 @@ export async function loadPage(tab = state.activeTab) {
 export function renderSqlResult(result) {
   const container = $("sql-result-box");
   if (!container) return;
+  state.lastSqlResult = result;
   const rows = result.rows || [];
-  const body = rows.length ? table(Object.keys(rows[0]), rows.map((row) => `<tr>${Object.keys(rows[0]).map((column) => `<td>${formatCell(row[column])}</td>`).join("")}</tr>`).join("")) : emptyState("check", "Statement completed", "The SQL query succeeded and returned 0 rows.");
-  container.innerHTML = `<div class="result-meta">${badge("success", "success", "Success")}<span>${formatNumber(result.rowCount ?? rows.length)} row(s)</span><span>${formatNumber(result.durationMs)} ms</span></div>${body}`;
+  const body = rows.length ? table(Object.keys(rows[0]), rows.map((row) => `<tr>${Object.keys(rows[0]).map((column) => `<td>${formatCell(row[column])}</td>`).join("")}</tr>`).join(""), { scroll: true }) : emptyState("check", "Statement completed", "The SQL query succeeded and returned 0 rows.");
+  const exportActions = rows.length
+    ? `<span class="grow"></span><button class="btn btn-ghost btn-sm" type="button" data-action="copy-sql-result">${icon("copy")}Copy JSON</button><button class="btn btn-ghost btn-sm" type="button" data-action="export-sql-csv">${icon("download")}Export CSV</button>`
+    : "";
+  container.innerHTML = `<div class="result-meta">${badge("success", "success", "Success")}<span>${formatNumber(result.rowCount ?? rows.length)} row(s)</span><span>${formatNumber(result.durationMs)} ms</span>${exportActions}</div>${body}`;
+}
+
+export function renderSavedQueries() {
+  const container = $("saved-queries-list");
+  if (!container) return;
+  const queries = state.savedQueries || [];
+  if (!queries.length) {
+    container.innerHTML = emptyState("save", "No saved queries yet", "Write a query in the workbench and save it to share with your team.");
+    return;
+  }
+  container.innerHTML = `<div class="resource-list">${queries.map((query) => `<div class="saved-query-item ${state.activeSavedQueryId === query.id ? "active" : ""}"><div class="list-main"><span class="resource-icon">${icon(query.favorite ? "star" : "save")}</span><div class="list-text"><button class="resource-link" type="button" data-action="load-saved-query" data-id="${esc(query.id)}" title="${esc(query.description || query.name)}">${esc(query.name)}</button><small>${esc(truncate(query.sql.replace(/\s+/g, " "), 52))}${query.run_count > 0 ? ` · run ${formatNumber(query.run_count)}×` : ""}</small></div></div><div class="list-actions"><button class="icon-btn btn-sm" type="button" data-action="edit-saved-query" data-id="${esc(query.id)}" title="Edit saved query">${icon("terminal")}</button><button class="icon-btn btn-sm" type="button" data-action="delete-saved-query" data-id="${esc(query.id)}" data-name="${esc(query.name)}" title="Delete saved query">${icon("trash")}</button></div></div>`).join("")}</div>`;
+}
+
+function columnInputHtml(col, value, idPrefix) {
+  const name = esc(col.name);
+  const type = String(col.dataType || col.udtName || "text").toLowerCase();
+  const inputId = `${idPrefix}-${col.name}`;
+  const isBool = type === "boolean" || type === "bool";
+  const isJson = type.includes("json");
+  const isNumeric = ["integer", "bigint", "smallint", "numeric", "real", "double precision", "serial", "bigserial", "int", "int4", "int8", "float8"].includes(type);
+  const isTimestamp = type.includes("timestamp");
+  const serialized = value === null || value === undefined
+    ? ""
+    : typeof value === "object" ? JSON.stringify(value) : String(value);
+
+  let control;
+  if (isBool) {
+    control = `<select id="${esc(inputId)}" data-col="${name}" data-kind="boolean"><option value="" ${value === null || value === undefined ? "selected" : ""}>NULL / default</option><option value="true" ${value === true || value === "true" ? "selected" : ""}>true</option><option value="false" ${value === false || value === "false" ? "selected" : ""}>false</option></select>`;
+  } else if (isJson) {
+    control = `<textarea id="${esc(inputId)}" class="code-input" rows="2" data-col="${name}" data-kind="json" placeholder='{"key": "value"}'>${esc(serialized)}</textarea>`;
+  } else if (isNumeric) {
+    control = `<input id="${esc(inputId)}" type="text" inputmode="decimal" data-col="${name}" data-kind="number" value="${esc(serialized)}" placeholder="number">`;
+  } else if (isTimestamp) {
+    control = `<input id="${esc(inputId)}" type="text" class="mono" data-col="${name}" data-kind="text" value="${esc(serialized)}" placeholder="2026-01-01T12:00:00Z or now()">`;
+  } else {
+    control = `<input id="${esc(inputId)}" type="text" data-col="${name}" data-kind="text" value="${esc(serialized)}" placeholder="${esc(type)}">`;
+  }
+  const constraints = [
+    col.isPrimaryKey ? "PK" : "",
+    col.isNullable === false ? "NOT NULL" : "",
+  ].filter(Boolean).join(" · ");
+  return `<div class="col-label"><strong>${name}</strong><small>${esc(type)}${constraints ? ` · ${esc(constraints)}` : ""}</small></div><div class="col-input">${control}</div>`;
+}
+
+export function buildColumnFormFields(columns, row = null, idPrefix = "col") {
+  if (!Array.isArray(columns) || !columns.length) {
+    return `<p class="subtle">No column metadata available — use the raw JSON insert instead.</p>`;
+  }
+  return columns.map((col) => columnInputHtml(col, row ? row[col.name] : null, idPrefix)).join("");
+}
+
+export function collectColumnFormPayload(container) {
+  const payload = {};
+  container.querySelectorAll("[data-col]").forEach((input) => {
+    const column = input.dataset.col;
+    const kind = input.dataset.kind;
+    const raw = String(input.value ?? "").trim();
+    if (raw === "") return; // leave to column defaults / NULL
+    if (kind === "boolean") {
+      payload[column] = raw === "true";
+    } else if (kind === "json") {
+      try { payload[column] = JSON.parse(raw); } catch { throw new Error(`Column "${column}" is not valid JSON.`); }
+    } else if (kind === "number") {
+      const num = Number(raw);
+      payload[column] = Number.isFinite(num) ? num : raw;
+    } else {
+      payload[column] = raw;
+    }
+  });
+  return payload;
+}
+
+export function updateSavedQueryLabel() {
+  const label = $("sql-active-query-label");
+  if (!label) return;
+  const active = state.savedQueries.find((query) => query.id === state.activeSavedQueryId);
+  label.textContent = active ? `editing saved query · ${active.name}` : "unsaved query";
 }
 
 export function updateRealtimeUi(status, message = "") {

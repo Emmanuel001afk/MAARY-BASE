@@ -4,7 +4,7 @@ import {
 } from "./js/core.js";
 import { COMMAND_ITEMS, PAGE_META, loadPage, renderPageSkeleton } from "./js/pages.js";
 import {
-  activateLocalTab, closeRealtime, handleAction, handleChange, handleInput, handleSubmit, renderSqlHistory,
+  activateLocalTab, applyNavSectionState, closeRealtime, handleAction, handleChange, handleInput, handleSubmit, renderSqlHistory,
 } from "./js/actions.js";
 
 function applyTheme(theme) {
@@ -196,6 +196,8 @@ async function selectProject(slug, targetTab = null) {
   state.activeProject = project;
   state.activeTable = null;
   state.activeBucket = null;
+  state.activeSavedQueryId = null;
+  state.lastSqlResult = null;
   state.rowBrowser.offset = 0;
   storageAdapter.set("maary_active_project", project.slug);
   $("project-select").value = project.slug;
@@ -540,6 +542,7 @@ function bindEvents() {
 async function init() {
   applyTheme(storageAdapter.get("maary_theme") || "dark");
   setAuthMode("login");
+  applyNavSectionState();
   bindEvents();
   await refreshPlatformStatus();
   try {

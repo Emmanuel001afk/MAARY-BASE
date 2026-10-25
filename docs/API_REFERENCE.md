@@ -73,7 +73,9 @@ All project-scoped endpoints accept either a `:projectRef` slug (e.g. `acme-api`
 - `POST /v1/projects/:projectRef/database/tables/:tableName/rls`
 - `GET /v1/projects/:projectRef/database/diagnostics` — Least-privilege role verification and relation sizes.
 - `POST /v1/projects/:projectRef/database/policies` & `DELETE .../database/policies/:tableName/:policyName`
-- `POST /v1/projects/:projectRef/database/sql`
+- `POST /v1/projects/:projectRef/database/sql` — accepts optional `savedQueryId` to record run statistics for a saved query.
+- `GET|POST /v1/projects/:projectRef/database/queries` — shared saved-query library (name, description, SQL, favorite). Mutations require `developer`+.
+- `PATCH|DELETE /v1/projects/:projectRef/database/queries/:queryId` — rename/update/pin (`favorite`), or delete; `PATCH` with `{ "markRun": true }` records an execution.
 - `GET|POST /v1/projects/:projectRef/database/migrations` & `POST .../database/migrations/:version/rollback`
 - `GET /v1/projects/:projectRef/openapi.json`
 - `GET|POST|PATCH|DELETE /v1/projects/:projectRef/rest/:table`

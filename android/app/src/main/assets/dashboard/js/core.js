@@ -39,6 +39,9 @@ export const state = {
   orgSlugTouched: false,
   commandIndex: 0,
   commandItems: [],
+  savedQueries: [],
+  activeSavedQueryId: null,
+  lastSqlResult: null,
   rowBrowser: {
     limit: 25,
     offset: 0,
@@ -203,6 +206,26 @@ export function downloadText(filename, content, mimeType = "application/json") {
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function csvCell(value) {
+  if (value === null || value === undefined) return "";
+  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+export function toCsv(rows) {
+  if (!Array.isArray(rows) || !rows.length) return "";
+  const columns = [...new Set(rows.flatMap((row) => Object.keys(row || {})))];
+  const lines = [columns.map(csvCell).join(",")];
+  for (const row of rows) lines.push(columns.map((column) => csvCell(row?.[column])).join(","));
+  return lines.join("\r\n");
+}
+
+export function downloadCsv(filename, rows) {
+  const csv = toCsv(rows);
+  if (!csv) throw new Error("There are no rows to export.");
+  downloadText(filename, csv, "text/csv;charset=utf-8");
 }
 
 export function openDialog(id) {

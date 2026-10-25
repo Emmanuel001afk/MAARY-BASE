@@ -1371,3 +1371,214 @@ export async function getProjectDatabaseDiagnostics(
     extensions,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Saved SQL Queries (Studio SQL Editor query library)
+// ---------------------------------------------------------------------------
+
+export interface SavedQueryRecord {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string;
+  sql: string;
+  favorite: boolean;
+  last_run_at: string | null;
+  run_count: number;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const SAVED_QUERY_NAME_RE = /^[\w .:@/-]{1,120}$/;
+const SAVED_QUERY_MAX_SQL_BYTES = 200_000;
+
+function assertSavedQueryName(name: string): string {
+  const trimmed = String(name || "").trim();
+  if (!trimmed) {
+    throw new ValidationError("Saved query 'name' is required.");
+  }
+  if (!SAVED_QUERY_NAME_RE.test(trimmed)) {
+    throw new ValidationError(
+      "Saved query name must be 1-120 characters (letters, numbers, spaces, and . : @ / _ -)."
+    );
+  }
+  return trimmed;
+}
+
+function assertSavedQuerySql(sql: string): string {
+  const trimmed = String(sql || "").trim();
+  if (!trimmed) {
+    throw new ValidationError("Saved query 'sql' is required.");
+  }
+  if (Buffer.byteLength(trimmed, "utf8") > SAVED_QUERY_MAX_SQL_BYTES) {
+    throw new ValidationError(
+      `Saved query SQL must be under ${SAVED_QUERY_MAX_SQL_BYTES / 1024} KB.`
+    );
+  }
+  return trimmed;
+}
+
+export async function listSavedQueries(
+  projectId: string
+): Promise<SavedQueryRecord[]> {
+  const res = await pool.query<SavedQueryRecord>(
+    `SELECT * FROM platform_saved_queries
+      WHERE project_id = $1
+      ORDER BY favorite DESC, updated_at DESC`,
+    [projectId]
+  );
+  return res.rows;
+}
+
+export async function createSavedQuery(
+  project: ProjectRecord,
+  input: {
+    name: string;
+    description?: string;
+    sql: string;
+    favorite?: boolean;
+  },
+  actorId?: string | null
+): Promise<SavedQueryRecord> {
+  const name = assertSavedQueryName(input.name);
+  const sql = assertSavedQuerySql(input.sql);
+
+  const existing = await pool.query(
+    `SELECT id FROM platform_saved_queries WHERE project_id = $1 AND name = $2`,
+    [project.id, name]
+  );
+  if (existing.rowCount) {
+    throw new ConflictError(
+      `A saved query named '${name}' already exists in this project.`
+    );
+  }
+
+  const res = await pool.query<SavedQueryRecord>(
+    `INSERT INTO platform_saved_queries (
+      project_id, name, description, sql, favorite, created_by, updated_by
+    ) VALUES ($1, $2, $3, $4, $5, $6, $6)
+    RETURNING *`,
+    [
+      project.id,
+      name,
+      String(input.description || "").trim().slice(0, 500),
+      sql,
+      Boolean(input.favorite),
+      actorId ?? null,
+    ]
+  );
+  const record = res.rows[0]!;
+
+  await recordAuditEvent({
+    projectId: project.id,
+    actorType: actorId ? "user" : "system",
+    actorId: actorId ?? null,
+    action: "database.saved_query.created",
+    resourceType: "saved_query",
+    resourceId: record.id,
+    metadata: { name },
+  });
+  return record;
+}
+
+export async function updateSavedQuery(
+  project: ProjectRecord,
+  queryId: string,
+  input: {
+    name?: string;
+    description?: string;
+    sql?: string;
+    favorite?: boolean;
+    markRun?: boolean;
+  },
+  actorId?: string | null
+): Promise<SavedQueryRecord> {
+  const currentRes = await pool.query<SavedQueryRecord>(
+    `SELECT * FROM platform_saved_queries WHERE id = $1 AND project_id = $2`,
+    [queryId, project.id]
+  );
+  const current = currentRes.rows[0];
+  if (!current) {
+    throw new NotFoundError("Saved query not found in this project.");
+  }
+
+  const name =
+    input.name !== undefined ? assertSavedQueryName(input.name) : current.name;
+  const sql =
+    input.sql !== undefined ? assertSavedQuerySql(input.sql) : current.sql;
+  const description =
+    input.description !== undefined
+      ? String(input.description).trim().slice(0, 500)
+      : current.description;
+  const favorite =
+    input.favorite !== undefined ? Boolean(input.favorite) : current.favorite;
+
+  if (name !== current.name) {
+    const clash = await pool.query(
+      `SELECT id FROM platform_saved_queries
+        WHERE project_id = $1 AND name = $2 AND id <> $3`,
+      [project.id, name, queryId]
+    );
+    if (clash.rowCount) {
+      throw new ConflictError(
+        `A saved query named '${name}' already exists in this project.`
+      );
+    }
+  }
+
+  const runUpdates = input.markRun
+    ? `, last_run_at = now(), run_count = platform_saved_queries.run_count + 1`
+    : "";
+  const res = await pool.query<SavedQueryRecord>(
+    `UPDATE platform_saved_queries
+        SET name = $3, description = $4, sql = $5, favorite = $6,
+            updated_by = $7, updated_at = now()${runUpdates}
+      WHERE id = $1 AND project_id = $2
+      RETURNING *`,
+    [queryId, project.id, name, description, sql, favorite, actorId ?? null]
+  );
+  const record = res.rows[0]!;
+
+  await recordAuditEvent({
+    projectId: project.id,
+    actorType: actorId ? "user" : "system",
+    actorId: actorId ?? null,
+    action: input.markRun
+      ? "database.saved_query.run"
+      : "database.saved_query.updated",
+    resourceType: "saved_query",
+    resourceId: record.id,
+    metadata: { name },
+  });
+  return record;
+}
+
+export async function deleteSavedQuery(
+  project: ProjectRecord,
+  queryId: string,
+  actorId?: string | null
+): Promise<{ id: string; name: string }> {
+  const res = await pool.query<{ id: string; name: string }>(
+    `DELETE FROM platform_saved_queries
+      WHERE id = $1 AND project_id = $2
+      RETURNING id, name`,
+    [queryId, project.id]
+  );
+  const deleted = res.rows[0];
+  if (!deleted) {
+    throw new NotFoundError("Saved query not found in this project.");
+  }
+
+  await recordAuditEvent({
+    projectId: project.id,
+    actorType: actorId ? "user" : "system",
+    actorId: actorId ?? null,
+    action: "database.saved_query.deleted",
+    resourceType: "saved_query",
+    resourceId: deleted.id,
+    metadata: { name: deleted.name },
+  });
+  return deleted;
+}

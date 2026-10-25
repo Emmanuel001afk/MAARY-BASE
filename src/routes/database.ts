@@ -6,16 +6,20 @@ import {
   applyProjectMigration,
   createProjectRlsPolicy,
   createProjectTable,
+  createSavedQuery,
   type CreateTableColumnInput,
   deleteProjectRlsPolicy,
+  deleteSavedQuery,
   dropProjectTable,
   executeProjectSql,
   getProjectDatabaseDiagnostics,
   getTableSchema,
   inspectProjectSchema,
   listProjectMigrations,
+  listSavedQueries,
   rollbackProjectMigration,
   setProjectTableRls,
+  updateSavedQuery,
 } from "../services/database.service.js";
 import { realtimeBroker } from "../services/realtime.service.js";
 
@@ -241,6 +245,7 @@ export async function registerDatabaseRoutes(
       params?: unknown[];
       readOnly?: boolean;
       allowDestructive?: boolean;
+      savedQueryId?: string;
       impersonate?: {
         role?: "anon" | "authenticated" | "service_role";
         userId?: string;
@@ -270,6 +275,15 @@ export async function registerDatabaseRoutes(
     });
 
     await realtimeBroker.flushDatabaseEvents();
+    if (body.savedQueryId) {
+      // Best-effort run statistics for the Studio saved-query library.
+      await updateSavedQuery(
+        project,
+        body.savedQueryId,
+        { markRun: true },
+        platformUser?.id ?? null
+      ).catch(() => null);
+    }
     return res;
   });
 
@@ -332,6 +346,104 @@ export async function registerDatabaseRoutes(
       );
       await realtimeBroker.flushDatabaseEvents();
       return { migration };
+    }
+  );
+
+  await registerSavedQueryRoutes(app);
+}
+
+export async function registerSavedQueryRoutes(
+  app: FastifyInstance
+): Promise<void> {
+  // Saved SQL Queries — Studio SQL Editor query library (project-scoped)
+  app.get("/v1/projects/:projectRef/database/queries", async (request) => {
+    const { projectRef } = request.params as { projectRef: string };
+    const { project } = await requireProjectControlAccess(request, projectRef);
+    const queries = await listSavedQueries(project.id);
+    return { queries };
+  });
+
+  app.post(
+    "/v1/projects/:projectRef/database/queries",
+    async (request, reply) => {
+      const { projectRef } = request.params as { projectRef: string };
+      const { project, platformUser } = await requireProjectControlAccess(
+        request,
+        projectRef,
+        ["owner", "admin", "developer"]
+      );
+      const body = (request.body ?? {}) as {
+        name?: string;
+        description?: string;
+        sql?: string;
+        favorite?: boolean;
+      };
+      if (!body.name || !body.sql) {
+        throw new ValidationError(
+          "Saved query 'name' and 'sql' are required."
+        );
+      }
+      const query = await createSavedQuery(
+        project,
+        {
+          name: body.name,
+          description: body.description,
+          sql: body.sql,
+          favorite: body.favorite,
+        },
+        platformUser?.id ?? null
+      );
+      return reply.code(201).send({ query });
+    }
+  );
+
+  app.patch(
+    "/v1/projects/:projectRef/database/queries/:queryId",
+    async (request) => {
+      const { projectRef, queryId } = request.params as {
+        projectRef: string;
+        queryId: string;
+      };
+      const { project, platformUser } = await requireProjectControlAccess(
+        request,
+        projectRef,
+        ["owner", "admin", "developer"]
+      );
+      const body = (request.body ?? {}) as {
+        name?: string;
+        description?: string;
+        sql?: string;
+        favorite?: boolean;
+        markRun?: boolean;
+      };
+      const query = await updateSavedQuery(
+        project,
+        queryId,
+        body,
+        platformUser?.id ?? null
+      );
+      return { query };
+    }
+  );
+
+  app.delete(
+    "/v1/projects/:projectRef/database/queries/:queryId",
+    async (request) => {
+      const { projectRef, queryId } = request.params as {
+        projectRef: string;
+        queryId: string;
+      };
+      const { project, platformUser } = await requireProjectControlAccess(
+        request,
+        projectRef,
+        ["owner", "admin", "developer"]
+      );
+      const deleted = await deleteSavedQuery(
+        project,
+        queryId,
+        platformUser?.id ?? null
+      );
+      return { deleted };
     }
   );
 }
