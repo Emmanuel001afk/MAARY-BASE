@@ -15,6 +15,11 @@ All project-scoped endpoints accept either a `:projectRef` slug (e.g. `acme-api`
 
 ## 1. Health, Readiness & Platform Administration
 
+- `GET /` / `GET /dashboard/` — Management Studio shell.
+- `GET /dashboard/js/navigation.js` — Data-driven primary/contextual Studio menu model.
+- `GET /guide/` — Public Platform Atlas with the Supabase structure mapping and phone-server guide.
+- `GET /guide/guide.css` — Standalone atlas stylesheet.
+- `GET /mobile/` — Mobile web connection client.
 - `GET /health` — Process liveness check.
 - `GET /ready` — Verifies PostgreSQL query execution, applied migrations, and `STORAGE_DIR` writability (`503` if degraded).
 - `GET /v1/metrics` — JSON or Prometheus (`?format=prometheus`) operational metrics.

@@ -9,6 +9,8 @@
 
 > **Why external PostgreSQL for production?** Embedded PGlite runs in-process for convenient single-developer onboarding and tests, whereas external PostgreSQL 16+ provides true multi-client connection pooling, native OS role enforcement, concurrent worker throughput, and continuous WAL archiving.
 
+> **Android phone lab:** `npm run start:phone` starts the same Fastify API from Termux with PGlite and `HOST=0.0.0.0`. It is for trusted local/LAN evaluation only, not production. See [`PHONE_AS_SERVER.md`](PHONE_AS_SERVER.md) for exact client URLs, HTTPS requirements, wake-lock guidance, and backups.
+
 ---
 
 ## 2. Production Environment Variables

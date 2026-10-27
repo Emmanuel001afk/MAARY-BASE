@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="MARI BASE Platform Atlas: Supabase-inspired navigation structure, service mapping, and a complete Android phone-as-server connection guide.">
+  <meta name="theme-color" content="#0b1110">
+  <title>MARI BASE — Platform Atlas &amp; Phone Server Guide</title>
+  <link rel="icon" type="image/svg+xml" href="/dashboard/logo.svg">
+  <link rel="stylesheet" href="/guide/guide.css">
+</head>
+<body>
+  <a class="skip-link" href="#atlas">Skip to platform atlas</a>
+
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Open MARI BASE Studio">
+      <span class="brand-mark" aria-hidden="true">M</span>
+      <span>MARI BASE<small>Platform Atlas</small></span>
+    </a>
+    <nav class="header-nav" aria-label="Guide navigation">
+      <a href="#navigation">Navigation</a>
+      <a href="#mapping">Mapping</a>
+      <a href="#phone-as-server">Phone server</a>
+      <a href="/mobile/">Mobile client</a>
+      <a class="header-cta" href="/">Open Studio</a>
+    </nav>
+  </header>
+
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-inner">
+      <div>
+        <p class="eyebrow">Independent, self-hostable backend platform</p>
+        <h1 id="hero-title">A backend you can <span>actually navigate.</span></h1>
+        <p class="hero-lead">MARI BASE now follows the same readable information architecture as a modern database Studio: a scope bar, grouped product sidebar, contextual submenus, and focused workspaces. This atlas shows how Supabase concepts map to real MARI BASE pages and endpoints — then explains how to run and connect a phone as the server.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#phone-as-server">Connect a phone as server →</a>
+          <a class="button" href="/">Open Management Studio</a>
+          <a class="button" href="#mapping">View mapping</a>
+        </div>
+        <div class="hero-meta" aria-label="Guide topics">
+          <span>4 visual layers</span>
+          <span>17 functional sections</span>
+          <span>3 connection paths</span>
+          <span>No external dependencies</span>
+        </div>
+      </div>
+
+      <div class="anatomy" aria-label="Diagram of Studio navigation levels">
+        <div class="anatomy-topbar" aria-hidden="true">
+          <span class="chip"></span><span class="chip"></span><span class="chip"></span><span class="chip"></span>
+        </div>
+        <div class="anatomy-grid" aria-hidden="true">
+          <div class="anatomy-panel">
+            <div class="panel-label">1 · Primary sidebar</div>
+            <div class="anatomy-line active">Overview</div>
+            <div class="anatomy-line">Database</div>
+            <div class="anatomy-line">Authentication</div>
+            <div class="anatomy-line">Storage</div>
+            <div class="anatomy-line">Functions</div>
+          </div>
+          <div class="anatomy-panel">
+            <div class="panel-label">2 · Product menu</div>
+            <div class="anatomy-line">Management</div>
+            <div class="anatomy-line active">Tables</div>
+            <div class="anatomy-line">Policies</div>
+            <div class="anatomy-line">Migrations</div>
+            <div class="anatomy-line">Backups</div>
+          </div>
+          <div class="anatomy-panel anatomy-content">
+            <div class="panel-label">3 · Focused content</div>
+            <div class="anatomy-content-card"></div>
+            <div class="anatomy-content-card large"></div>
+            <div class="anatomy-legend"><span>Object list</span><span>Inspector / editor</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="atlas-shell" id="atlas">
+    <nav class="toc" aria-label="Table of contents">
+      <strong>In this atlas</strong>
+      <ol>
+        <li><a href="#navigation">Visual structure</a></li>
+        <li><a href="#menus">Sections &amp; menus</a></li>
+        <li><a href="#mapping">Supabase mapping</a></li>
+        <li><a href="#data">Data &amp; services</a></li>
+        <li><a href="#phone-as-server">Phone as server</a></li>
+        <li><a href="#connections">Connection paths</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+        <li><a href="#sources">Sources &amp; gaps</a></li>
+      </ol>
+      <p class="toc-note">This guide is served directly by your MARI BASE instance. No account is required to read it.</p>
+    </nav>
+
+    <main class="atlas-main">
+      <section class="section" id="navigation">
+        <p class="section-kicker">01 · Visual structure</p>
+        <h2>Four levels, one clear mental model</h2>
+        <p>A dense backend stops being confusing when every control has a place. MARI BASE divides the Studio into scope, product, submenu, and work area. Each level answers one question.</p>
+        <div class="grid grid-2">
+          <article class="card">
+            <span class="card-index">01</span>
+            <h3>Topbar — “Where am I?”</h3>
+            <p>Choose an organization and project, see instance readiness, use quick navigation, switch theme, and sign out. Supabase uses the same scope-first approach with organization and project selectors.</p>
+            <div class="pill-row"><span class="pill green">Organization</span><span class="pill green">Project</span><span class="pill">Health</span><span class="pill">Operator</span></div>
+          </article>
+          <article class="card">
+            <span class="card-index">02</span>
+            <h3>Primary sidebar — “What product?”</h3>
+            <p>Grouped into Workspace, Database, Products, Operate, and Platform. The active item gets a clear accent and every label names a real capability, not a vague “Tools” bucket.</p>
+            <div class="pill-row"><span class="pill blue">Home</span><span class="pill blue">Build</span><span class="pill blue">Operate</span><span class="pill blue">Admin</span></div>
+          </article>
+          <article class="card">
+            <span class="card-index">03</span>
+            <h3>Context menu — “Which task?”</h3>
+            <p>The second sidebar changes with the selected product. It exposes Supabase-style groups such as Management, Access Control, Configuration, Tools, and Platform. Every entry jumps to a real page, local tab, or form.</p>
+            <div class="pill-row"><span class="pill purple">Grouped menu</span><span class="pill purple">Deep links</span><span class="pill purple">Active state</span></div>
+          </article>
+          <article class="card">
+            <span class="card-index">04</span>
+            <h3>Content — “Do the work”</h3>
+            <p>A page header explains the scope, page actions expose the primary operation, local tabs split complex modules, and cards/tables contain the data. No giant undifferentiated wall of controls.</p>
+            <div class="pill-row"><span class="pill amber">Header</span><span class="pill amber">Tabs</span><span class="pill amber">Cards</span><span class="pill amber">Tables</span></div>
+          </article>
+        </div>
+        <div class="callout"><span>✓</span><span><strong>Implemented in the platform:</strong> the primary sidebar, context menu, Connect page, Structure map page, command palette, and dedicated local tabs are all functional — not static screenshots.</span></div>
+      </section>
+
+      <section class="section" id="menus">
+        <p class="section-kicker">02 · Sections &amp; menus</p>
+        <h2>The Studio menu, end to end</h2>
+        <p>This is the current primary sidebar. Supabase's source generates routes in similar tool/product/other/settings groups. MARI BASE keeps its own feature names and maps each one to an available backend endpoint.</p>
+        <div class="menu-board">
+          <div class="menu-column">
+            <h3><span class="dot"></span> Workspace &amp; Home</h3>
+            <ul>
+              <li>Overview <span>project health</span></li>
+              <li>Workspaces &amp; Org <span>teams &amp; RBAC</span></li>
+              <li>Connect <span>phone &amp; clients</span></li>
+              <li>Structure map <span>navigation atlas</span></li>
+            </ul>
+          </div>
+          <div class="menu-column">
+            <h3><span class="dot blue"></span> Database</h3>
+            <ul>
+              <li>Table Editor <span>tables &amp; rows</span></li>
+              <li>SQL &amp; Policies <span>workbench &amp; RLS</span></li>
+              <li>Migrations <span>versioned DDL</span></li>
+              <li>API &amp; Explorer <span>REST / RPC / OpenAPI</span></li>
+            </ul>
+          </div>
+          <div class="menu-column">
+            <h3><span class="dot purple"></span> Products</h3>
+            <ul>
+              <li>Authentication <span>users &amp; sessions</span></li>
+              <li>Storage <span>buckets &amp; objects</span></li>
+              <li>Realtime <span>channels &amp; events</span></li>
+              <li>Functions &amp; Jobs <span>workers &amp; queues</span></li>
+            </ul>
+          </div>
+          <div class="menu-column">
+            <h3><span class="dot amber"></span> Operate</h3>
+            <ul>
+              <li>Logs &amp; Monitoring <span>errors &amp; audit</span></li>
+              <li>Backups &amp; Settings <span>snapshots &amp; APK</span></li>
+              <li>Security &amp; Keys <span>keys &amp; secrets</span></li>
+            </ul>
+          </div>
+          <div class="menu-column">
+            <h3><span class="dot"></span> Platform</h3>
+            <ul>
+              <li>Platform Admin <span>instance &amp; operators</span></li>
+              <li>SDK, CLI &amp; Docs <span>client snippets</span></li>
+            </ul>
+          </div>
+          <div class="menu-column">
+            <h3><span class="dot blue"></span> Contextual examples</h3>
+            <ul>
+              <li>Database <span>management / access / platform</span></li>
+              <li>Auth <span>manage / configuration</span></li>
+              <li>Storage <span>manage / configuration</span></li>
+              <li>Functions <span>functions / secrets / jobs / schedules</span></li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="mapping">
+        <p class="section-kicker">03 · Supabase mapping</p>
+        <h2>Concept → MARI BASE destination</h2>
+        <p>The mapping is based on Supabase Studio's route and product-menu source files, pinned at commit <code>9391f60</code>. It is a functional map, not a fork of Supabase code or branding.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Supabase concept</th><th>MARI BASE Studio destination</th><th>Real backend endpoint / file</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Project Overview</strong></td><td>Workspace → Overview</td><td><code>GET /v1/projects/:ref</code></td></tr>
+              <tr><td><strong>Organization settings</strong></td><td>Workspace → Workspaces &amp; Org</td><td><code>/v1/organizations/:orgRef</code></td></tr>
+              <tr><td><strong>Table Editor</strong></td><td>Database → Table Editor</td><td><code>/database/tables</code>, <code>/rest/:table</code></td></tr>
+              <tr><td><strong>SQL Editor / snippets</strong></td><td>Database → SQL &amp; Policies</td><td><code>/database/sql</code>, <code>/database/queries</code></td></tr>
+              <tr><td><strong>Database → Policies / Roles</strong></td><td>SQL policies + Table Editor diagnostics</td><td><code>/database/policies</code>, <code>/database/diagnostics</code></td></tr>
+              <tr><td><strong>Database → Migrations / Backups</strong></td><td>Migrations + Backups &amp; Settings</td><td><code>/database/migrations</code>, <code>/backups</code></td></tr>
+              <tr><td><strong>PostgREST / API Docs</strong></td><td>Products → API &amp; Explorer</td><td><code>/rest/:table</code>, <code>/rpc/:fn</code>, <code>/openapi.json</code></td></tr>
+              <tr><td><strong>GoTrue / Auth users</strong></td><td>Products → Authentication</td><td><code>/auth/admin/users</code>, <code>/auth/admin/sessions</code></td></tr>
+              <tr><td><strong>Storage buckets / policies</strong></td><td>Products → Storage</td><td><code>/storage/buckets</code>, <code>/storage/buckets/:name/policies</code></td></tr>
+              <tr><td><strong>Realtime Inspector</strong></td><td>Products → Realtime</td><td><code>/realtime/ws</code>, <code>/realtime/events</code></td></tr>
+              <tr><td><strong>Edge Functions / Secrets</strong></td><td>Products → Functions &amp; Jobs</td><td><code>/functions</code>, <code>/secrets</code>, <code>/jobs</code></td></tr>
+              <tr><td><strong>Logs / Observability / Advisors</strong></td><td>Operate → Logs &amp; Monitoring</td><td><code>/v1/metrics</code>, <code>/v1/platform/diagnostics</code>, <code>/audit</code></td></tr>
+              <tr><td><strong>Project Settings / API Keys / Vault</strong></td><td>Operate → Security &amp; Keys; Backups &amp; Settings</td><td><code>/api-keys</code>, <code>/secrets</code>, <code>/members</code></td></tr>
+              <tr><td><strong>Hosted platform controls</strong></td><td>Platform → Platform Admin</td><td><code>/v1/platform/*</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section" id="data">
+        <p class="section-kicker">04 · Data &amp; services</p>
+        <h2>What sits behind the menus</h2>
+        <p>The Studio is a control plane for one Fastify API. Project data is isolated by PostgreSQL schemas and roles; object bytes live on disk; all control-plane state lives in platform tables.</p>
+        <div class="grid grid-2">
+          <article class="card">
+            <h3>Service architecture</h3>
+            <p>Fastify is the gateway. Dedicated services implement auth, database metadata, PostgREST-style data APIs, storage, realtime WebSockets, isolated function workers, durable jobs, diagnostics, and verified backups.</p>
+            <div class="pill-row"><span class="pill green">Fastify</span><span class="pill blue">PostgreSQL / PGlite</span><span class="pill purple">WebSocket</span><span class="pill amber">Workers</span></div>
+          </article>
+          <article class="card">
+            <h3>Isolation model</h3>
+            <p>Each project gets <code>proj_&lt;slug&gt;</code>, <code>role_&lt;slug&gt;</code>, and <code>role_&lt;slug&gt;_rls</code>. JWT claims power <code>auth.uid()</code>, <code>auth.role()</code>, <code>auth.email()</code>, and <code>auth.jwt()</code> inside transactions.</p>
+            <div class="pill-row"><span class="pill green">RLS</span><span class="pill green">Least privilege</span><span class="pill blue">Per-project schema</span></div>
+          </article>
+          <article class="card">
+            <h3>Control-plane tables</h3>
+            <p><code>platform_organizations</code>, <code>platform_projects</code>, <code>platform_users</code>, <code>platform_sessions</code>, <code>platform_api_keys</code>, <code>platform_secrets</code>, <code>platform_storage_*</code>, <code>platform_realtime_*</code>, <code>platform_functions</code>, <code>platform_jobs</code>, <code>platform_backups</code>.</p>
+          </article>
+          <article class="card">
+            <h3>Client plane</h3>
+            <p>Public requests use project API keys. Signed-in users add a Bearer JWT. REST, RPC, Auth, Storage, Functions, and Realtime all resolve to the same project-scoped policy layer.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="phone-as-server">
+        <p class="section-kicker">05 · Phone as server</p>
+        <h2>Run MARI BASE on an Android phone</h2>
+        <p>The Android companion app is a <strong>client</strong>. To make the phone itself the server, run the Node.js backend in Termux. This is intended for a local lab or offline demo; use a real host and PostgreSQL 16+ for production.</p>
+
+        <div class="grid grid-2">
+          <article class="card accent">
+            <h3>Phone as client — recommended</h3>
+            <p>Server runs on a computer, Docker host, or VPS. Phone enters an HTTPS URL. Best reliability, security, and performance.</p>
+          </article>
+          <article class="card warning">
+            <h3>Phone as server — local lab</h3>
+            <p>Termux runs Fastify + embedded PGlite. Bind to <code>0.0.0.0</code>, then connect via loopback or trusted LAN. Keep the phone awake and charged.</p>
+          </article>
+        </div>
+
+        <div class="callout warning" style="margin-top:18px"><span>!</span><span><strong>iPhone note:</strong> Termux is Android-only. An iPhone can be a browser/client, but this project cannot run its Node server natively on iOS. Use a computer, VPS, or external host as the server.</span></div>
+
+        <h3 style="margin:28px 0 14px">Setup in six steps</h3>
+        <div class="steps">
+          <article class="step" id="termux-runtime">
+            <h3>Install Termux and Node 22+</h3>
+            <p>Install Termux from F-Droid or its official GitHub release. Node.js supports Android through Termux packages; MARI BASE requires Node 22 or newer.</p>
+            <pre><code>pkg update &amp;&amp; pkg upgrade -y
+pkg install -y git nodejs-lts tmux curl
+node --version   # v22.x or newer
+npm --version</code></pre>
+          </article>
+
+          <article class="step" id="termux-install">
+            <h3>Download the platform and install dependencies</h3>
+            <p>Use your fork or branch containing <code>npm run start:phone</code>. If the LTS package is older than 22, install <code>nodejs</code>, switch mirrors with <code>termux-change-repo</code>, or use PRoot with Node 22.</p>
+            <pre><code>git clone https://github.com/Emmanuel001afk/MAARY-BASE.git maary-base
+cd maary-base
+npm ci</code></pre>
+          </article>
+
+          <article class="step" id="termux-start">
+            <h3>Start the server on all interfaces</h3>
+            <p>The launcher creates <code>.env</code> if needed, sets <code>HOST=0.0.0.0</code> and <code>PORT=4100</code>, uses PGlite, enables migrations, prints the phone's LAN IP, and starts the API.</p>
+            <pre><code>npm run start:phone
+
+# Equivalent manual command:
+cp -n .env.example .env
+HOST=0.0.0.0 PORT=4100 \
+DATABASE_URL=pglite://./data/postgres \
+AUTO_MIGRATE=true npm run dev</code></pre>
+          </article>
+
+          <article class="step" id="termux-verify">
+            <h3>Verify readiness</h3>
+            <p>The Android companion checks both endpoints below before it will open the Studio. A ready response must contain <code>"status":"ready"</code>.</p>
+            <pre><code>curl -f http://127.0.0.1:4100/ready
+curl -f http://127.0.0.1:4100/v1/platform
+ip -4 addr show wlan0 | grep inet</code></pre>
+          </article>
+
+          <article class="step" id="termux-connect">
+            <h3>Connect a browser or companion app</h3>
+            <p>Use <code>http://127.0.0.1:4100</code> on the server phone. From another device on the same Wi-Fi, use <code>http://&lt;phone-LAN-IP&gt;:4100</code> and enable the native app's cleartext HTTP option for trusted LAN development only.</p>
+            <div class="pill-row"><span class="pill green">Studio: /</span><span class="pill blue">Mobile client: /mobile/</span><span class="pill purple">Guide: /guide/</span></div>
+          </article>
+
+          <article class="step" id="termux-keepalive">
+            <h3>Keep it awake and protect the data</h3>
+            <p>Disable battery optimization for Termux, keep the notification and charger connected, run <code>termux-wake-lock</code>, and use <code>tmux</code>. Back up <code>data/</code>, <code>storage/</code>, and <code>.env</code>.</p>
+            <pre><code>termux-wake-lock
+tmux new -s maary
+# Inside tmux:
+cd ~/maary-base &amp;&amp; npm run start:phone</code></pre>
+          </article>
+        </div>
+
+        <div class="callout danger"><span>!</span><span><strong>Do not expose raw HTTP to the internet.</strong> For remote access, place a trusted HTTPS tunnel or reverse proxy with a valid certificate in front of the phone, set a restrictive <code>CORS_ORIGIN</code>, replace all development secrets, and use external PostgreSQL for production.</span></div>
+      </section>
+
+      <section class="section" id="connections">
+        <p class="section-kicker">06 · Connection paths</p>
+        <h2>Which URL should I enter?</h2>
+        <p>The companion expects the server <em>origin</em> only — no <code>/dashboard</code>, <code>/mobile</code>, query string, or fragment. It verifies <code>/ready</code> and <code>/v1/platform</code>.</p>
+        <div class="connection-path">
+          <div class="label">Same phone server</div>
+          <div><code>http://127.0.0.1:4100</code><p>Use when Termux and the browser/companion run on the same Android device. The native app has a Phone server (4100) preset.</p></div>
+        </div>
+        <div class="connection-path">
+          <div class="label">Trusted Wi-Fi LAN</div>
+          <div><code>http://192.168.1.42:4100</code><p>Replace with the phone's <code>wlan0</code> address. Tick “Allow cleartext HTTP for local / LAN development” in the native companion. Guest Wi-Fi or AP isolation can block this.</p></div>
+        </div>
+        <div class="connection-path">
+          <div class="label">Android emulator</div>
+          <div><code>http://10.0.2.2:4100</code><p>Use for a server running on the computer that hosts the emulator. The emulator's own 127.0.0.1 is not the host.</p></div>
+        </div>
+        <div class="connection-path">
+          <div class="label">Remote / internet</div>
+          <div><code>https://api.example.com</code><p>Use a valid TLS certificate through a tunnel or reverse proxy. Remote plain HTTP is deliberately rejected by the Android companion.</p></div>
+        </div>
+        <div class="callout"><span>✓</span><span><strong>First account:</strong> open the Studio and register an operator. In development the first account becomes Superadmin; in production it requires <code>PLATFORM_BOOTSTRAP_TOKEN</code>.</span></div>
+      </section>
+
+      <section class="section" id="troubleshooting">
+        <p class="section-kicker">07 · Troubleshooting</p>
+        <h2>Common connection failures</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Node version error</strong></td><td>Termux installed Node below 22.</td><td>Install current <code>nodejs</code>/<code>nodejs-lts</code>, change mirrors, or use PRoot with Node 22.</td></tr>
+              <tr><td><strong>Works on phone, not laptop</strong></td><td>Server bound to loopback, different subnet, or AP isolation.</td><td>Use <code>HOST=0.0.0.0</code>, same Wi-Fi, correct <code>wlan0</code> IP, no guest network/VPN.</td></tr>
+              <tr><td><strong>HTTPS required</strong></td><td>Remote URL uses plain HTTP.</td><td>Use an HTTPS tunnel/reverse proxy with a valid trusted certificate.</td></tr>
+              <tr><td><strong>Platform not verified</strong></td><td><code>/ready</code> or <code>/v1/platform</code> failed.</td><td>Check both endpoints, database migrations, and storage directory permissions.</td></tr>
+              <tr><td><strong>Server stops when screen sleeps</strong></td><td>Android battery optimization / phantom process killer.</td><td>Set Termux battery to unrestricted, run <code>termux-wake-lock</code>, use <code>tmux</code>, and keep the device charging.</td></tr>
+              <tr><td><strong>CORS error</strong></td><td>Client origin is not allowed.</td><td>Set <code>CORS_ORIGIN</code> to the exact origin, or <code>*</code> only in an isolated lab.</td></tr>
+              <tr><td><strong>Data disappeared after reinstall</strong></td><td>PGlite data and object bytes were stored only in the phone checkout.</td><td>Restore <code>data/</code>, <code>storage/</code>, and <code>.env</code> from a verified backup.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section" id="sources">
+        <p class="section-kicker">08 · Sources &amp; honest gaps</p>
+        <h2>Research provenance</h2>
+        <p>Supabase Studio navigation was inspected from its open-source repository at commit <code>9391f60ec973113d69f5fa7a09a4860e50f56a50</code> on 2026-10-26. The mapping document in the repository lists every source file.</p>
+        <div class="source-list">
+          <a href="https://github.com/supabase/supabase/blob/9391f60ec973113d69f5fa7a09a4860e50f56a50/apps/studio/components/layouts/Navigation/NavigationBar/NavigationBar.utils.tsx" target="_blank" rel="noopener">Primary route generator <span>NavigationBar.utils.tsx</span></a>
+          <a href="https://github.com/supabase/supabase/blob/9391f60ec973113d69f5fa7a09a4860e50f56a50/apps/studio/components/layouts/ProjectLayout/LayoutHeader/MobileMenuContent/mobileProductMenuRegistry.tsx" target="_blank" rel="noopener">Product-menu registry <span>mobileProductMenuRegistry.tsx</span></a>
+          <a href="https://github.com/supabase/supabase/blob/9391f60ec973113d69f5fa7a09a4860e50f56a50/apps/studio/components/layouts/DatabaseLayout/DatabaseMenu.utils.tsx" target="_blank" rel="noopener">Database submenu <span>DatabaseMenu.utils.tsx</span></a>
+          <a href="https://github.com/supabase/supabase/blob/9391f60ec973113d69f5fa7a09a4860e50f56a50/apps/studio/components/layouts/AuthLayout/AuthLayout.utils.ts" target="_blank" rel="noopener">Auth submenu <span>AuthLayout.utils.ts</span></a>
+          <a href="https://nodejs.org/en/download/package-manager/all" target="_blank" rel="noopener">Node.js on Android / Termux <span>nodejs.org</span></a>
+          <a href="https://github.com/Emmanuel001afk/MAARY-BASE" target="_blank" rel="noopener">MARI BASE repository <span>github.com</span></a>
+        </div>
+        <div class="grid grid-2" style="margin-top:18px">
+          <article class="card">
+            <h3>Deliberately not faked</h3>
+            <p>MARI BASE does not provide Supabase SSO, billing, branching, GraphQL, hosted compute upgrades, vector/analytics buckets, or a managed control plane. The Studio does not show dead links for these.</p>
+          </article>
+          <article class="card">
+            <h3>What is functionally equivalent</h3>
+            <p>Project/organization scope, primary/secondary navigation, Table Editor, SQL + RLS, migrations, backups, auth users/sessions, storage, realtime, functions/jobs, logs, API keys/secrets, and API docs.</p>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="site-footer-inner">
+      <span>MARI BASE Platform Atlas · Supabase-inspired structure, independent implementation.</span>
+      <span><a href="/">Studio</a> · <a href="/mobile/">Mobile client</a> · <a href="#phone-as-server">Phone server guide</a></span>
+    </div>
+  </footer>
+</body>
+</html>

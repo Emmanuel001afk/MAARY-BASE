@@ -134,6 +134,7 @@ const requiredStudioAssets = [
   "assets/dashboard/js/actions.js",
   "assets/dashboard/js/core.js",
   "assets/dashboard/js/pages.js",
+  "assets/dashboard/js/navigation.js",
   "assets/dashboard/logo.svg",
 ];
 for (const assetName of requiredStudioAssets) {
@@ -143,11 +144,11 @@ for (const assetName of requiredStudioAssets) {
   }
 }
 const bundledStudioHtml = extractEntry("assets/dashboard/index.html").toString("utf8");
-if (!bundledStudioHtml.includes("MARI BASE") || !bundledStudioHtml.includes('data-tab="database"')) {
+if (!bundledStudioHtml.includes("MARI BASE") || !bundledStudioHtml.includes('data-tab="database"') || !bundledStudioHtml.includes('id="context-menu"')) {
   fail("Bundled Management Studio is missing the MARI BASE identity or database navigation");
 }
 const bundledStudioPages = extractEntry("assets/dashboard/js/pages.js").toString("utf8");
-for (const feature of ["database", "organizations", "storage", "realtime", "backups"]) {
+for (const feature of ["database", "organizations", "storage", "realtime", "backups", "connect", "map"]) {
   if (!bundledStudioPages.toLowerCase().includes(feature)) {
     fail(`Bundled Management Studio pages do not contain expected '${feature}' section`);
   }

@@ -29,6 +29,19 @@ PostgreSQL 16+ (pg.Pool)  OR  Embedded PGlite (local dev / test)
 
 ---
 
+## 1.1 Management Studio Information Architecture
+
+The Studio uses a four-level, Supabase-inspired structure: a scope topbar, a grouped primary sidebar, a contextual product menu, and a focused content area. `public/dashboard/js/navigation.js` is the single source of truth for `PRIMARY_SECTIONS`, `PRODUCT_MENUS`, `PHONE_SERVER_COMMANDS`, and `SUPABASE_SERVICE_MAP`; `app.js` renders the context menu on every route change. Each context-menu item points to a real page, local tab, or DOM control.
+
+Two project-free pages document the platform:
+
+- `/guide/` and Studio **Structure map** — visual navigation hierarchy, Supabase source mapping, service/data mapping, and honest feature gaps.
+- Studio **Connect** and `/guide/#phone-as-server` — phone-as-client, Android emulator, and phone-as-server paths with copyable commands and a live `/ready` + `/v1/platform` check.
+
+See [`SUPABASE_STRUCTURE_MAPPING.md`](SUPABASE_STRUCTURE_MAPPING.md) and [`PHONE_AS_SERVER.md`](PHONE_AS_SERVER.md) for the complete mapping and connection runbook.
+
+---
+
 ## 2. Multi-Project Isolation & PostgreSQL Row-Level Security
 
 Every provisioned project receives strict database-level isolation:

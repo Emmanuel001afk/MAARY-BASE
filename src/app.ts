@@ -60,6 +60,10 @@ export async function buildApp() {
         imgSrc: ["'self'", "data:", "blob:"],
         connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
         frameAncestors: ["'self'"],
+        // Keep local/LAN HTTP usable for phone-server development. Production
+        // deployments still upgrade insecure subresource requests to HTTPS.
+        "upgrade-insecure-requests":
+          config.NODE_ENV === "production" ? [] : null,
       },
     },
   });

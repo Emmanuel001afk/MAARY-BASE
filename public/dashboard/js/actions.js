@@ -199,6 +199,36 @@ export async function handleAction(action, element) {
       if (target) await copyText(target.textContent || target.value || "");
       break;
     }
+    case "check-instance": {
+      const output = $("instance-check-result");
+      if (!output) break;
+      output.className = "instance-check-result";
+      output.textContent = "Checking /ready and /v1/platform…";
+      const [readyResult, platformResult] = await Promise.allSettled([
+        api("/ready", { allowUnauthorized: true, skipPlatformAuth: true, timeout: 12_000 }),
+        api("/v1/platform", { allowUnauthorized: true, skipPlatformAuth: true, timeout: 12_000 }),
+      ]);
+      const ready = readyResult.status === "fulfilled" ? readyResult.value : null;
+      const platform = platformResult.status === "fulfilled" ? platformResult.value : null;
+      const readyOk = ready?.status === "ready";
+      const platformOk = Boolean(platform && (platform.name || platform.database));
+      const dbMode = platform?.database?.mode || ready?.checks?.database?.mode || "unknown";
+      const migrations = ready?.dependencies?.migrations || "unknown";
+      const storage = ready?.dependencies?.storage || "unknown";
+      if (readyOk && platformOk) {
+        output.className = "instance-check-result ok";
+        output.innerHTML = `✓ Ready · ${esc(platform?.name || "MARI BASE")} · DB ${esc(dbMode)} · migrations ${esc(migrations)} · storage ${esc(storage)}`;
+      } else {
+        output.className = "instance-check-result bad";
+        const reason = readyResult.status === "rejected"
+          ? readyResult.reason?.message
+          : platformResult.status === "rejected"
+            ? platformResult.reason?.message
+            : "One or more readiness probes did not pass.";
+        output.innerHTML = `✕ Not ready · ${esc(reason || "Check both endpoints.")}`;
+      }
+      break;
+    }
     case "copy-credential":
       await copyText($("credential-value").textContent || "");
       break;

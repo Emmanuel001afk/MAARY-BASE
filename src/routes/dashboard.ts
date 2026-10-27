@@ -4,13 +4,19 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 
 const DASHBOARD_DIR = resolve(process.cwd(), "public", "dashboard");
 const MOBILE_DIR = resolve(process.cwd(), "public", "mobile");
+const GUIDE_DIR = resolve(process.cwd(), "public", "guide");
 
 const DASHBOARD_ASSETS = {
   "/dashboard/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   "/dashboard/app.js": { file: "app.js", type: "application/javascript; charset=utf-8" },
   "/dashboard/js/core.js": { file: "js/core.js", type: "application/javascript; charset=utf-8" },
+  "/dashboard/js/navigation.js": { file: "js/navigation.js", type: "application/javascript; charset=utf-8" },
   "/dashboard/js/pages.js": { file: "js/pages.js", type: "application/javascript; charset=utf-8" },
   "/dashboard/js/actions.js": { file: "js/actions.js", type: "application/javascript; charset=utf-8" },
+} as const;
+
+const GUIDE_ASSETS = {
+  "/guide/guide.css": { file: "guide.css", type: "text/css; charset=utf-8" },
 } as const;
 
 const MOBILE_ASSETS = {
@@ -48,6 +54,19 @@ export async function registerDashboardRoutes(
   for (const [route, asset] of Object.entries(DASHBOARD_ASSETS)) {
     app.get(route, async (_request, reply) =>
       sendAssetFromDir(DASHBOARD_DIR, reply, asset.file, asset.type)
+    );
+  }
+
+  const serveGuideIndex = async (_request: unknown, reply: FastifyReply) =>
+    sendAssetFromDir(GUIDE_DIR, reply, "index.html", "text/html; charset=utf-8");
+
+  app.get("/guide", async (_request, reply) => reply.redirect("/guide/"));
+  app.get("/guide/", serveGuideIndex);
+  app.get("/guide/index.html", serveGuideIndex);
+
+  for (const [route, asset] of Object.entries(GUIDE_ASSETS)) {
+    app.get(route, async (_request, reply) =>
+      sendAssetFromDir(GUIDE_DIR, reply, asset.file, asset.type)
     );
   }
 

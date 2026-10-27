@@ -3,6 +3,7 @@ import {
   sessionTokens, settleConfirm, showToast, slugify, state, storageAdapter, withButtonBusy,
 } from "./js/core.js";
 import { COMMAND_ITEMS, PAGE_META, loadPage, renderPageSkeleton } from "./js/pages.js";
+import { renderContextMenu } from "./js/navigation.js";
 import {
   activateLocalTab, applyNavSectionState, closeRealtime, handleAction, handleChange, handleInput, handleSubmit, renderSqlHistory,
 } from "./js/actions.js";
@@ -155,6 +156,32 @@ function syncWorkspaceVisibility() {
   $("page-root").classList.toggle("hidden", !canRenderPage);
 }
 
+async function handleContextNavigation(link) {
+  const targetTab = link.dataset.contextTab;
+  const contextKey = link.dataset.contextKey || "";
+  if (!targetTab || !PAGE_META[targetTab]) return;
+  if (state.activeTab !== targetTab) {
+    await navigateTo(targetTab, { contextKey });
+  } else {
+    state.activeContextKey = contextKey;
+    renderContextMenu(targetTab, contextKey);
+  }
+  const localTab = link.dataset.contextLocal;
+  if (localTab) activateLocalTab(localTab);
+  const focusId = link.dataset.contextFocus;
+  if (focusId) {
+    window.setTimeout(() => {
+      const target = $(focusId);
+      if (!target) return;
+      const disclosure = target.closest("details");
+      if (disclosure) disclosure.open = true;
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  }
+  const action = link.dataset.contextAction;
+  if (action) await handleAction(action, link);
+}
+
 async function refreshOrganizations() {
   const res = await api("/v1/organizations");
   state.organizations = res.organizations || [];
@@ -174,9 +201,11 @@ export async function navigateTo(tab, options = {}) {
   const target = PAGE_META[tab] ? tab : "overview";
   if (state.activeTab === "realtime" && target !== "realtime") closeRealtime();
   state.activeTab = target;
+  state.activeContextKey = options.contextKey || null;
   document.querySelectorAll(".nav-item[data-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === target);
   });
+  renderContextMenu(target, state.activeContextKey);
   setSidebarOpen(false);
   if (options.updateHash !== false) {
     const hash = `#${target}`;
@@ -329,6 +358,13 @@ function bindEvents() {
 
     const commandBtn = event.target.closest("[data-command-index]");
     if (commandBtn) { executeCommand(Number(commandBtn.dataset.commandIndex)); return; }
+
+    const contextLink = event.target.closest("[data-context-tab]");
+    if (contextLink && !contextLink.hasAttribute("href")) {
+      event.preventDefault();
+      handleContextNavigation(contextLink).catch(reportError);
+      return;
+    }
 
     const localTab = event.target.closest("[data-local-tab]");
     if (localTab) { activateLocalTab(localTab.dataset.localTab); return; }
