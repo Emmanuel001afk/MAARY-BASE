@@ -88,8 +88,10 @@
         <div>
           <ol>
             <li><strong>Android emulator:</strong> use <code>http://10.0.2.2:4100</code> for a server running on your computer.</li>
-            <li><strong>Physical device:</strong> use your computer’s LAN address or a public HTTPS URL on the same network.</li>
-            <li><strong>Production:</strong> use HTTPS with a valid certificate. Plain HTTP is intended for local development.</li>
+            <li><strong>Physical device as client:</strong> use your computer’s LAN address or a public HTTPS URL.</li>
+            <li><strong>Phone as server:</strong> run <code>npm run start:phone</code> in Termux, then use <code>http://127.0.0.1:4100</code> on the same phone or <code>http://&lt;phone-LAN-IP&gt;:4100</code> from another device on trusted Wi-Fi.</li>
+            <li><strong>Production:</strong> use HTTPS with a valid certificate. Plain HTTP is intended only for local development.</li>
+            <li><a href="/guide/#phone-as-server" rel="noopener">Open the full phone-server guide →</a></li>
           </ol>
         </div>
       </details>

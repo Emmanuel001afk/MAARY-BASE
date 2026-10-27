@@ -2,6 +2,9 @@ import {
   $, PROJECT_FREE_TABS, api, badge, esc, formatBytes, formatDate, formatNumber, icon,
   moduleStatusBadge, quotaMeter, state, timeAgo, truncate,
 } from "./core.js";
+import {
+  PHONE_SERVER_COMMANDS, PRIMARY_SECTIONS, PRODUCT_MENUS, SUPABASE_SERVICE_MAP,
+} from "./navigation.js";
 
 export const PAGE_META = {
   overview: {
@@ -14,68 +17,78 @@ export const PAGE_META = {
     description: "Manage multi-project workspaces, inherited team RBAC roles, and operational tiers.",
     actions: `<button class="btn btn-primary btn-sm" type="button" data-action="open-new-org">${icon("plus")}<span>New workspace</span></button>`,
   },
+  connect: {
+    group: "Workspace", title: "Connect & Devices", icon: "phone",
+    description: "Connect a browser or Android companion, or run MARI BASE itself on an Android phone with Termux.",
+    actions: `<a class="btn btn-secondary btn-sm" href="/guide/#phone-as-server" rel="noopener">${icon("external")}<span>Full guide</span></a><button class="btn btn-primary btn-sm" type="button" data-action="check-instance">${icon("activity")}<span>Check instance</span></button>`,
+  },
+  map: {
+    group: "Workspace", title: "Platform Structure Map", icon: "map",
+    description: "A visual map of Supabase-style sections, product menus, services, and their real MARI BASE equivalents.",
+    actions: `<a class="btn btn-secondary btn-sm" href="/guide/" rel="noopener">${icon("external")}<span>Public atlas</span></a><button class="btn btn-primary btn-sm" type="button" data-nav="connect">${icon("phone")}<span>Connect device</span></button>`,
+  },
   database: {
-    group: "Build", title: "Table Editor & Data Browser", icon: "database",
+    group: "Database", title: "Table Editor & Data Browser", icon: "database",
     description: "Design relational schemas visually or with JSON, alter columns and indexes, and browse/edit rows.",
     actions: `<button class="btn btn-secondary btn-sm" type="button" data-nav="sql">${icon("terminal")}<span>SQL Editor</span></button><button class="btn btn-primary btn-sm" type="button" data-action="focus-create-table">${icon("plus")}<span>New table</span></button>`,
   },
   sql: {
-    group: "Build", title: "SQL Editor & Row-Level Security", icon: "terminal",
+    group: "Database", title: "SQL Editor & Row-Level Security", icon: "terminal",
     description: "Run scoped PostgreSQL queries, build a shared saved-query library, simulate client roles and auth.uid(), and author RLS policies.",
     actions: `<button class="btn btn-secondary btn-sm" type="button" data-nav="migrations">${icon("layers")}<span>Migrations</span></button>`,
   },
   migrations: {
-    group: "Build", title: "Schema Migrations", icon: "layers",
+    group: "Database", title: "Schema Migrations", icon: "layers",
     description: "Track repeatable, SHA-256 checksummed schema changes with controlled down-SQL rollbacks.",
     actions: `<button class="btn btn-secondary btn-sm" type="button" data-nav="backups">${icon("storage")}<span>Backups</span></button>`,
   },
   api: {
-    group: "Build", title: "API Reference & Live Explorer", icon: "globe",
+    group: "Database", title: "API Reference & Live Explorer", icon: "globe",
     description: "Auto-generated table REST & RPC endpoints, interactive request runner, and OpenAPI 3.1 schema.",
     actions: `<button class="btn btn-secondary btn-sm" type="button" data-nav="docs">${icon("book")}<span>SDK &amp; CLI</span></button>`,
   },
   auth: {
-    group: "Build", title: "Authentication & Users", icon: "lock",
+    group: "Products", title: "Authentication & Users", icon: "lock",
     description: "End-user directory, active sessions, OAuth providers, password recovery flows, and operator security.",
     actions: `<button class="btn btn-secondary btn-sm" type="button" data-nav="security">${icon("key")}<span>API Keys</span></button>`,
   },
   storage: {
-    group: "Build", title: "Object Storage", icon: "storage",
+    group: "Products", title: "Object Storage", icon: "storage",
     description: "Manage public/private buckets, object metadata, signed URLs, quotas, and storage access policies.",
     actions: `<button class="btn btn-primary btn-sm" type="button" data-action="focus-create-bucket">${icon("plus")}<span>New bucket</span></button>`,
   },
   realtime: {
-    group: "Build", title: "Realtime Inspector", icon: "realtime",
+    group: "Products", title: "Realtime Inspector", icon: "realtime",
     description: "Stream PostgreSQL row changes, configure public/private topics, and publish WebSocket broadcasts.",
     actions: "",
   },
   functions: {
-    group: "Build", title: "Server Functions & Jobs", icon: "function",
+    group: "Products", title: "Server Functions & Jobs", icon: "function",
     description: "Deploy isolated Node handlers, configure function env vars, retry durable jobs, and schedule tasks.",
     actions: `<button class="btn btn-primary btn-sm" type="button" data-action="focus-deploy-function">${icon("plus")}<span>Deploy function</span></button>`,
   },
   logs: {
-    group: "Operate & Admin", title: "Logs, Health & Diagnostics", icon: "activity",
+    group: "Operate", title: "Logs, Health & Diagnostics", icon: "activity",
     description: "Truthful module verification probes, structured error logs, function execution logs, and audit history.",
     actions: "",
   },
   backups: {
-    group: "Operate & Admin", title: "Backups, Recovery & Project Settings", icon: "layers",
+    group: "Operate", title: "Backups, Recovery & Project Settings", icon: "layers",
     description: "Create SHA-256 verified snapshots, run safeguarded restores, configure project quotas, and inspect Android builds.",
     actions: `<button class="btn btn-primary btn-sm" type="button" data-action="create-backup-focus">${icon("plus")}<span>Create snapshot</span></button>`,
   },
   security: {
-    group: "Operate & Admin", title: "Security, API Keys & Team", icon: "shield",
+    group: "Operate", title: "Security, API Keys & Team", icon: "shield",
     description: "Issue scoped anon/service_role keys, store AES-256-GCM encrypted secrets, and manage project RBAC.",
     actions: `<button class="btn btn-primary btn-sm" type="button" data-action="focus-create-key">${icon("key")}<span>Create API key</span></button>`,
   },
   platform: {
-    group: "Operate & Admin", title: "Platform Administration", icon: "settings",
+    group: "Platform", title: "Platform Administration", icon: "settings",
     description: "Instance-wide runtime health, operator RBAC, PostgreSQL extensions, and full-platform disaster recovery.",
     actions: "",
   },
   docs: {
-    group: "Operate & Admin", title: "SDK, CLI & Developer Guides", icon: "book",
+    group: "Platform", title: "SDK, CLI & Developer Guides", icon: "book",
     description: "Copyable, project-configured TypeScript SDK, CLI, REST, Realtime, Functions, and Docker self-hosting guides.",
     actions: "",
   },
@@ -84,6 +97,8 @@ export const PAGE_META = {
 export const COMMAND_ITEMS = [
   { group: "Workspace", label: "Project Overview", detail: "Health probes, connection URLs, environments", icon: "home", tab: "overview", shortcut: "G O" },
   { group: "Workspace", label: "Workspaces & Organizations", detail: "Multi-project teams & RBAC", icon: "users", tab: "organizations", shortcut: "G W" },
+  { group: "Workspace", label: "Connect & Devices", detail: "Phone client, phone server, readiness checks", icon: "phone", tab: "connect", shortcut: "G C" },
+  { group: "Workspace", label: "Platform Structure Map", detail: "Supabase menu mapping and service architecture", icon: "map", tab: "map", shortcut: "G X" },
   { group: "Build", label: "Table Editor", detail: "Visual columns, alter schema, row browser", icon: "database", tab: "database", shortcut: "G D" },
   { group: "Build", label: "SQL & RLS Policies", detail: "Query runner, saved-query library & Row-Level Security", icon: "terminal", tab: "sql", shortcut: "G S" },
   { group: "Build", label: "Schema Migrations", detail: "Checksummed up/down migrations", icon: "layers", tab: "migrations", shortcut: "G M" },
@@ -116,7 +131,8 @@ export function card(title, body, options = {}) {
   const actions = options.actions ? `<div class="card-header-actions">${options.actions}</div>` : "";
   const bodyClass = options.flush ? "card-body flush" : "card-body";
   const extraClass = options.className ? ` ${options.className}` : "";
-  return `<section class="card${extraClass}"><header class="card-header"><div class="card-title">${iconHtml}<div><h2>${esc(title)}</h2>${subtitle}</div></div>${actions}</header><div class="${bodyClass}">${body}</div></section>`;
+  const idAttr = options.id ? ` id="${esc(options.id)}"` : "";
+  return `<section class="card${extraClass}"${idAttr}><header class="card-header"><div class="card-title">${iconHtml}<div><h2>${esc(title)}</h2>${subtitle}</div></div>${actions}</header><div class="${bodyClass}">${body}</div></section>`;
 }
 
 export function emptyState(iconName, title, copy, actionHtml = "") {
@@ -196,6 +212,171 @@ export function renderVisualColumnsBuilder() {
 }
 
 const templates = {
+  connect: () => {
+    const origin = window.location.origin;
+    return `${pageHeader("connect")}
+      <section class="atlas-hero" aria-labelledby="connect-hero-title">
+        <div>
+          <p class="eyebrow">Connection workbench</p>
+          <h2 id="connect-hero-title">One backend, three clear connection paths.</h2>
+          <p>A phone can be a client, an emulator target, or — with Termux — the server itself. Choose the path first; then copy the exact commands and verify the same endpoints the Android companion checks.</p>
+          <div class="atlas-hero-actions">
+            <a class="btn btn-primary btn-sm" href="/guide/#phone-as-server" rel="noopener">${icon("book")}<span>Open full visual guide</span></a>
+            <a class="btn btn-secondary btn-sm" href="/mobile/" rel="noopener">${icon("phone")}<span>Mobile connection page</span></a>
+            <button class="btn btn-ghost btn-sm" type="button" data-action="copy-target" data-target="phone-start-code">${icon("copy")}<span>Copy start command</span></button>
+          </div>
+        </div>
+        <div class="atlas-hero-stats" aria-label="Connection overview">
+          <div class="atlas-stat"><strong>3</strong><span>connection paths</span></div>
+          <div class="atlas-stat"><strong>2</strong><span>verification endpoints</span></div>
+          <div class="atlas-stat"><strong>22+</strong><span>Node.js required</span></div>
+          <div class="atlas-stat"><strong>4100</strong><span>default API port</span></div>
+        </div>
+      </section>
+
+      <div class="phone-mode-grid section-gap">
+        <article id="phone-client-card" class="phone-mode-card recommended">
+          <h3>${icon("phone")}Phone as client <span class="badge badge-success">Recommended</span></h3>
+          <p>The backend runs on a computer, Docker host, or VPS. The phone enters its URL. Use HTTPS for remote servers and a trusted LAN address for local development.</p>
+          <div class="pill-row"><span class="pill">Browser / Android app</span><span class="pill">Stable host</span><span class="pill">Production ready</span></div>
+        </article>
+        <article id="phone-server-card" class="phone-mode-card">
+          <h3>${icon("server")}Phone as server <span class="badge badge-warning">Local lab</span></h3>
+          <p>Termux runs Node 22+, Fastify, and embedded PGlite on the Android device. Bind to <code class="mono">0.0.0.0</code> so a companion app can reach it.</p>
+          <div class="pill-row"><span class="pill">Termux</span><span class="pill">PGlite</span><span class="pill">Keep awake</span></div>
+        </article>
+      </div>
+
+      <div class="guide-note warning section-gap">
+        ${icon("alert")}
+        <div><strong>Important:</strong> the Android APK is a client, not a server. Its WebView cannot host the Fastify backend. To make the phone the server, run the commands below in Termux. iPhones cannot run Termux; use an external host for the server.</div>
+      </div>
+
+      <div class="section-gap">
+        ${card("Phone-as-server runbook", `
+          <div class="phone-step-list">
+            <div class="phone-step">
+              <span class="phone-step-num">1</span>
+              <div><h3>Install Node 22+ and the source</h3><p>Use Termux from F-Droid or its official GitHub release. Node's Android support is experimental, so check the reported version before continuing.</p>
+                <div class="command-card"><div class="command-card-head"><span>Termux · install</span><button class="btn btn-ghost btn-sm" type="button" data-action="copy-target" data-target="phone-install-code">${icon("copy")}Copy</button></div><pre id="phone-install-code">${esc(PHONE_SERVER_COMMANDS.install)}</pre></div>
+              </div>
+            </div>
+            <div class="phone-step">
+              <span class="phone-step-num">2</span>
+              <div><h3>Start on all interfaces</h3><p><code class="mono">npm run start:phone</code> sets <code class="mono">HOST=0.0.0.0</code>, uses PGlite, enables migrations, and prints the LAN address.</p>
+                <div class="command-card"><div class="command-card-head"><span>Termux · launch</span><button class="btn btn-ghost btn-sm" type="button" data-action="copy-target" data-target="phone-start-code">${icon("copy")}Copy</button></div><pre id="phone-start-code">${esc(PHONE_SERVER_COMMANDS.start)}</pre></div>
+              </div>
+            </div>
+            <div class="phone-step">
+              <span class="phone-step-num">3</span>
+              <div><h3>Verify the endpoints</h3><p>The native companion checks <code class="mono">/ready</code> and <code class="mono">/v1/platform</code> before opening the Studio. Find the Wi-Fi IP for other devices.</p>
+                <div class="command-card"><div class="command-card-head"><span>Termux · verify</span><button class="btn btn-ghost btn-sm" type="button" data-action="copy-target" data-target="phone-verify-code">${icon("copy")}Copy</button></div><pre id="phone-verify-code">${esc(PHONE_SERVER_COMMANDS.verify)}</pre></div>
+              </div>
+            </div>
+            <div class="phone-step">
+              <span class="phone-step-num">4</span>
+              <div><h3>Keep it alive and backed up</h3><p>Disable battery optimization, run <code class="mono">termux-wake-lock</code>, keep the device charging, and use <code class="mono">tmux</code>. Back up <code class="mono">data/</code>, <code class="mono">storage/</code>, and <code class="mono">.env</code>.</p></div>
+            </div>
+          </div>`, { id: "phone-commands", subtitle: "Copy/paste commands that match scripts/phone-server.sh and docs/PHONE_AS_SERVER.md.", iconName: "terminal" })}
+      </div>
+
+      <div class="grid-2 section-gap">
+        ${card("Connection URLs", `
+          <div class="connection-grid">
+            <div class="connection-card"><strong>Same phone</strong><code>${esc("http://127.0.0.1:4100")}</code><p>Use when Termux and the client are on the same device. Enter the origin without /dashboard.</p></div>
+            <div class="connection-card"><strong>Trusted LAN</strong><code>${esc("http://<phone-LAN-IP>:4100")}</code><p>Use the wlan0 address. Enable cleartext HTTP in the native companion only for a trusted LAN.</p></div>
+            <div class="connection-card"><strong>Android emulator</strong><code>${esc("http://10.0.2.2:4100")}</code><p>Reaches a server on the computer hosting the emulator, not the emulator itself.</p></div>
+            <div class="connection-card"><strong>Remote HTTPS</strong><code>${esc("https://api.example.com")}</code><p>Use a tunnel or reverse proxy with a valid certificate. Never expose raw HTTP publicly.</p></div>
+          </div>
+          <div class="guide-note top-gap">${icon("link")}<div><strong>This Studio origin:</strong> <code class="mono">${esc(origin)}</code>. The companion expects only the scheme, host, and optional port.</div></div>`, { id: "connection-paths", subtitle: "Choose the address that matches where the client and server actually run.", iconName: "link" })}
+
+        <div class="stack">
+          ${card("Verify this instance", `
+            <div class="instance-check">
+              <button class="btn btn-primary btn-sm" type="button" data-action="check-instance">${icon("activity")}<span>Check /ready &amp; /v1/platform</span></button>
+              <a class="btn btn-secondary btn-sm" href="/ready" target="_blank" rel="noopener">${icon("external")}<span>Open /ready</span></a>
+              <div id="instance-check-result" class="instance-check-result" role="status">Not checked yet.</div>
+            </div>
+            <p class="subtle top-gap">A healthy instance responds with <code class="mono">status: ready</code>, applied migrations, and writable storage. Use this before connecting a second device.</p>`, { id: "instance-check-card", subtitle: "Live readiness check against the server currently serving this Studio.", iconName: "activity" })}
+          ${card("Security checklist", `
+            <div class="checklist">
+              <div class="checklist-item"><span class="check-indicator">${icon("check")}</span><span>Use HTTPS with a valid certificate for remote access.</span></div>
+              <div class="checklist-item"><span class="check-indicator">${icon("check")}</span><span>Replace development JWT, encryption, and bootstrap secrets.</span></div>
+              <div class="checklist-item"><span class="check-indicator">${icon("check")}</span><span>Restrict <code class="mono">CORS_ORIGIN</code> to known client origins.</span></div>
+              <div class="checklist-item"><span class="check-indicator">${icon("check")}</span><span>Keep <code class="mono">service_role</code> keys off phones and browsers.</span></div>
+              <div class="checklist-item"><span class="check-indicator">${icon("check")}</span><span>Use PostgreSQL 16+ for production concurrency and WAL backups.</span></div>
+            </div>`, { id: "connection-security", subtitle: "Phone hosting is for local evaluation; production needs TLS, secrets, and a durable database.", iconName: "shield" })}
+        </div>
+      </div>`;
+  },
+
+  map: () => {
+    const sectionIcons = { workspace: "home", database: "database", products: "function", operate: "activity", platform: "settings" };
+    const primaryMenuHtml = PRIMARY_SECTIONS.map((section) => `
+      <div class="atlas-menu-card"><h3>${icon(sectionIcons[section.id] || "layers")}${esc(section.label)}</h3><ul>${section.items.map((entry) => `<li>${esc(entry.label)}<span>${esc(PAGE_META[entry.tab]?.group || "Workspace")}</span></li>`).join("")}</ul></div>`).join("");
+    const productMenuHtml = Object.entries(PRODUCT_MENUS).map(([tab, menu]) => `
+      <div class="atlas-menu-card"><h3>${icon(PAGE_META[tab]?.icon || "layers")}${esc(menu.title)}</h3><ul>${menu.groups.map((group) => `<li>${esc(group.label)}<span>${group.items.length} item${group.items.length === 1 ? "" : "s"}</span></li>`).join("")}</ul></div>`).join("");
+    const serviceRows = SUPABASE_SERVICE_MAP.map((entry) => `<tr><td><strong>${esc(entry.supabase)}</strong></td><td>${esc(entry.mari)}</td><td><code class="mono">${esc(entry.location)}</code></td><td>${badge(entry.status, entry.status === "Implemented" ? "success" : "warning")}</td><td>${esc(entry.detail)}</td></tr>`).join("");
+    return `${pageHeader("map")}
+      <section class="atlas-hero" aria-labelledby="map-hero-title">
+        <div>
+          <p class="eyebrow">Supabase Studio source · pinned 9391f60</p>
+          <h2 id="map-hero-title">Navigation is a map, not a mystery.</h2>
+          <p>This page documents the four visual layers, the primary and contextual menus, the service architecture, and the honest gaps between Supabase and MARI BASE. Every menu entry resolves to a working page or control.</p>
+          <div class="atlas-hero-actions"><a class="btn btn-primary btn-sm" href="/guide/" rel="noopener">${icon("external")}<span>Open public atlas</span></a><button class="btn btn-secondary btn-sm" type="button" data-nav="connect">${icon("phone")}<span>Connect a phone</span></button></div>
+        </div>
+        <div class="atlas-hero-stats" aria-label="Structure map overview">
+          <div class="atlas-stat"><strong>4</strong><span>visual layers</span></div>
+          <div class="atlas-stat"><strong>${PRIMARY_SECTIONS.length}</strong><span>primary groups</span></div>
+          <div class="atlas-stat"><strong>${Object.keys(PRODUCT_MENUS).length}</strong><span>context menus</span></div>
+          <div class="atlas-stat"><strong>${SUPABASE_SERVICE_MAP.length}</strong><span>service mappings</span></div>
+        </div>
+      </section>
+
+      <div class="section-gap">
+        ${card("Visual hierarchy", `
+          <div class="atlas-flow">
+            <div class="atlas-flow-card"><span class="atlas-flow-num">01</span><h3>Top scope bar</h3><p>Organization, project, health, quick navigation, theme, and operator identity.</p></div>
+            <div class="atlas-flow-card"><span class="atlas-flow-num">02</span><h3>Primary sidebar</h3><p>Workspace, Database, Products, Operate, and Platform product groups.</p></div>
+            <div class="atlas-flow-card"><span class="atlas-flow-num">03</span><h3>Context menu</h3><p>Grouped product tasks that change with the active section.</p></div>
+            <div class="atlas-flow-card"><span class="atlas-flow-num">04</span><h3>Work area</h3><p>Page header, local tabs, object lists, inspectors, forms, and tables.</p></div>
+          </div>`, { id: "map-hierarchy", subtitle: "The same reading order used by modern database Studios.", iconName: "map" })}
+      </div>
+
+      <div class="section-gap">
+        ${card("Primary sidebar menu", `<div class="atlas-menu-grid">${primaryMenuHtml}</div>`, { id: "map-products", subtitle: "Each group answers 'what product am I working with?'", iconName: "columns", flush: true })}
+      </div>
+
+      <div class="section-gap">
+        ${card("Contextual product menus", `<div class="atlas-menu-grid">${productMenuHtml}</div>`, { id: "map-context", subtitle: "Supabase-style Management, Access Control, Configuration, Tools, and Platform groups.", iconName: "layers", flush: true })}
+      </div>
+
+      <div class="section-gap">
+        ${card("Supabase service → MARI BASE implementation", table(["Supabase", "MARI BASE", "Location", "Status", "Notes"], serviceRows, { scroll: true }), { id: "map-services", subtitle: "A functional architecture map; MARI BASE is an independent implementation.", iconName: "network", flush: true })}
+      </div>
+
+      <div class="grid-2 section-gap">
+        ${card("Data isolation map", `<pre class="code-block">${esc(`platform_organizations ─┬─ platform_organization_members
+                        └─ platform_projects ─┬─ platform_api_keys
+                                              ├─ platform_storage_*
+                                              ├─ platform_functions / jobs
+                                              └─ platform_backups
+
+proj_<project-slug>       project application tables
+role_<project-slug>       least-privilege owner role
+role_<project-slug>_rls   RLS-enforcing client role
+auth.uid() / role() / jwt()   transaction-local claims`)}</pre>`, { id: "map-data", subtitle: "One control plane, isolated project schemas, and native PostgreSQL RLS.", iconName: "database" })}
+        <div class="stack">
+          ${card("Request path", `<div class="atlas-flow" style="grid-template-columns:1fr">
+            <div class="atlas-flow-card"><span class="atlas-flow-num">A</span><h3>Client → Fastify gateway</h3><p>Browser, SDK, CLI, or companion sends an API key and optional user JWT.</p></div>
+            <div class="atlas-flow-card"><span class="atlas-flow-num">B</span><h3>Service → project schema</h3><p>Auth, REST/RPC, Storage, Realtime, and Functions resolve the project scope.</p></div>
+            <div class="atlas-flow-card"><span class="atlas-flow-num">C</span><h3>PostgreSQL → RLS</h3><p>Transaction claims enforce policies under the project's least-privilege role.</p></div>
+          </div>`, { id: "map-request", subtitle: "How a public request reaches isolated project data.", iconName: "network" })}
+          <div id="map-gaps" class="atlas-gap">${icon("alert")}<div><strong>Honest gaps:</strong> MARI BASE does not provide Supabase SSO, billing, branching, GraphQL, vector/analytics buckets, or hosted compute upgrades. No dead menu entries are created for these features.</div></div>
+        </div>
+      </div>`;
+  },
+
   overview: () => {
     const project = state.activeProject;
     const origin = window.location.origin;
@@ -891,9 +1072,9 @@ curl -s "${origin}/v1/projects/${slug}/rest/todos?completed=eq.false&order=creat
 
     const composeCode = `# Production self-hosting with Docker Compose + PostgreSQL 16
 cp .env.example .env
-# Set JWT_SECRET, MASTER_ENCRYPTION_KEY (32+ chars), POSTGRES_PASSWORD, and PLATFORM_BOOTSTRAP_TOKEN
+# Set JWT_SECRET, ENCRYPTION_KEY (32+ chars), POSTGRES_PASSWORD, and PLATFORM_BOOTSTRAP_TOKEN
 docker compose up -d --build
-curl -f http://localhost:4000/ready`;
+curl -f http://localhost:4100/ready`;
 
     return `${pageHeader("docs")}
       <div class="grid-2">
@@ -1503,9 +1684,15 @@ async function loadDocs() {
   // Static project-customized documentation rendered directly in template
 }
 
+async function loadStaticPage() {
+  // Connect and Structure map are fully rendered by their templates.
+}
+
 const loaders = {
   overview: loadOverview,
   organizations: loadOrganizations,
+  connect: loadStaticPage,
+  map: loadStaticPage,
   database: loadDatabase,
   sql: loadSql,
   migrations: loadMigrations,

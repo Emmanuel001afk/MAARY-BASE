@@ -56,6 +56,10 @@
       <symbol id="i-save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h12v17l-6-4.2-6 4.2v-17Z"/></symbol>
       <symbol id="i-star" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.7l5.9-.8L12 3.5Z"/></symbol>
       <symbol id="i-columns" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15M15 4.5v15"/></symbol>
+      <symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M10.5 5.5h3"/><path d="M11 18.5h2"/></symbol>
+      <symbol id="i-map" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Z"/><path d="M9 3v15M15 6v15"/></symbol>
+      <symbol id="i-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="18" height="7" rx="2"/><rect x="3" y="13.5" width="18" height="7" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></symbol>
+      <symbol id="i-network" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="5" rx="1.5"/><rect x="2" y="16.5" width="6" height="5" rx="1.5"/><rect x="16" y="16.5" width="6" height="5" rx="1.5"/><path d="M12 7.5v5M5 16.5v-2h14v2M12 12.5v2"/></symbol>
     </defs>
   </svg>
 
@@ -147,7 +151,9 @@
         <div class="auth-footer-links">
           <a href="/ready" target="_blank" rel="noopener">Runtime status</a>
           <span aria-hidden="true">·</span>
-          <a href="/mobile" target="_blank" rel="noopener">Mobile companion</a>
+          <a href="/mobile/" target="_blank" rel="noopener">Mobile client</a>
+          <span aria-hidden="true">·</span>
+          <a href="/guide/" rel="noopener">Platform atlas &amp; phone setup</a>
           <span aria-hidden="true">·</span>
           <button class="text-btn" type="button" data-action="toggle-theme">Switch theme</button>
         </div>
@@ -225,91 +231,70 @@
 
       <aside id="sidebar" class="sidebar" aria-label="Workspace navigation">
         <div class="sidebar-scroll">
+          <div class="nav-scope-note">
+            <span class="nav-scope-dot" aria-hidden="true"></span>
+            <span><strong>Project scope</strong><small>Products, data, and settings</small></span>
+          </div>
+
           <div class="nav-section" data-nav-section="workspace">
             <button class="nav-section-head" type="button" data-action="toggle-nav-section" aria-expanded="true">
-              <span class="nav-section-label">Workspace</span>
+              <span class="nav-section-label">Workspace &amp; Home</span>
               <svg class="icon nav-chevron"><use href="#i-chevron"></use></svg>
             </button>
             <div class="nav-section-items">
-            <button class="nav-item active" type="button" data-tab="overview">
-              <svg class="icon"><use href="#i-home"></use></svg>
-              <span>Overview</span>
-            </button>
-            <button class="nav-item" type="button" data-tab="organizations">
-              <svg class="icon"><use href="#i-users"></use></svg>
-              <span>Workspaces &amp; Org</span>
-            </button>
+              <button class="nav-item active" type="button" data-tab="overview"><svg class="icon"><use href="#i-home"></use></svg><span>Overview</span></button>
+              <button class="nav-item" type="button" data-tab="organizations"><svg class="icon"><use href="#i-users"></use></svg><span>Workspaces &amp; Org</span></button>
+              <button class="nav-item" type="button" data-tab="connect"><svg class="icon"><use href="#i-phone"></use></svg><span>Connect</span></button>
+              <button class="nav-item" type="button" data-tab="map"><svg class="icon"><use href="#i-map"></use></svg><span>Structure map</span></button>
             </div>
           </div>
 
-          <div class="nav-section" data-nav-section="build">
+          <div class="nav-section" data-nav-section="database">
             <button class="nav-section-head" type="button" data-action="toggle-nav-section" aria-expanded="true">
-              <span class="nav-section-label">Build</span>
+              <span class="nav-section-label">Database</span>
               <svg class="icon nav-chevron"><use href="#i-chevron"></use></svg>
             </button>
             <div class="nav-section-items">
-            <button class="nav-item" type="button" data-tab="database">
-              <svg class="icon"><use href="#i-database"></use></svg>
-              <span>Table Editor</span>
+              <button class="nav-item" type="button" data-tab="database"><svg class="icon"><use href="#i-database"></use></svg><span>Table Editor</span></button>
+              <button class="nav-item" type="button" data-tab="sql"><svg class="icon"><use href="#i-terminal"></use></svg><span>SQL &amp; Policies</span></button>
+              <button class="nav-item" type="button" data-tab="migrations"><svg class="icon"><use href="#i-layers"></use></svg><span>Migrations</span></button>
+              <button class="nav-item" type="button" data-tab="api"><svg class="icon"><use href="#i-globe"></use></svg><span>API &amp; Explorer</span></button>
+            </div>
+          </div>
+
+          <div class="nav-section" data-nav-section="products">
+            <button class="nav-section-head" type="button" data-action="toggle-nav-section" aria-expanded="true">
+              <span class="nav-section-label">Products</span>
+              <svg class="icon nav-chevron"><use href="#i-chevron"></use></svg>
             </button>
-            <button class="nav-item" type="button" data-tab="sql">
-              <svg class="icon"><use href="#i-terminal"></use></svg>
-              <span>SQL &amp; Policies</span>
-            </button>
-            <button class="nav-item" type="button" data-tab="migrations">
-              <svg class="icon"><use href="#i-layers"></use></svg>
-              <span>Migrations</span>
-            </button>
-            <button class="nav-item" type="button" data-tab="api">
-              <svg class="icon"><use href="#i-globe"></use></svg>
-              <span>API &amp; Explorer</span>
-            </button>
-            <button class="nav-item" type="button" data-tab="auth">
-              <svg class="icon"><use href="#i-lock"></use></svg>
-              <span>Authentication</span>
-            </button>
-            <button class="nav-item" type="button" data-tab="storage">
-              <svg class="icon"><use href="#i-storage"></use></svg>
-              <span>Storage</span>
-            </button>
-            <button class="nav-item" type="button" data-tab="realtime">
-              <svg class="icon"><use href="#i-realtime"></use></svg>
-              <span>Realtime</span>
-              <span id="realtime-nav-dot" class="nav-live-dot hidden" title="WebSocket connected"></span>
-            </button>
-            <button class="nav-item" type="button" data-tab="functions">
-              <svg class="icon"><use href="#i-function"></use></svg>
-              <span>Functions &amp; Jobs</span>
-            </button>
+            <div class="nav-section-items">
+              <button class="nav-item" type="button" data-tab="auth"><svg class="icon"><use href="#i-lock"></use></svg><span>Authentication</span></button>
+              <button class="nav-item" type="button" data-tab="storage"><svg class="icon"><use href="#i-storage"></use></svg><span>Storage</span></button>
+              <button class="nav-item" type="button" data-tab="realtime"><svg class="icon"><use href="#i-realtime"></use></svg><span>Realtime</span><span id="realtime-nav-dot" class="nav-live-dot hidden" title="WebSocket connected"></span></button>
+              <button class="nav-item" type="button" data-tab="functions"><svg class="icon"><use href="#i-function"></use></svg><span>Functions &amp; Jobs</span></button>
             </div>
           </div>
 
           <div class="nav-section" data-nav-section="operate">
             <button class="nav-section-head" type="button" data-action="toggle-nav-section" aria-expanded="true">
-              <span class="nav-section-label">Operate &amp; Admin</span>
+              <span class="nav-section-label">Operate</span>
               <svg class="icon nav-chevron"><use href="#i-chevron"></use></svg>
             </button>
             <div class="nav-section-items">
-            <button class="nav-item" type="button" data-tab="logs">
-              <svg class="icon"><use href="#i-activity"></use></svg>
-              <span>Logs &amp; Monitoring</span>
+              <button class="nav-item" type="button" data-tab="logs"><svg class="icon"><use href="#i-activity"></use></svg><span>Logs &amp; Monitoring</span></button>
+              <button class="nav-item" type="button" data-tab="backups"><svg class="icon"><use href="#i-layers"></use></svg><span>Backups &amp; Settings</span></button>
+              <button class="nav-item" type="button" data-tab="security"><svg class="icon"><use href="#i-shield"></use></svg><span>Security &amp; Keys</span></button>
+            </div>
+          </div>
+
+          <div class="nav-section" data-nav-section="platform">
+            <button class="nav-section-head" type="button" data-action="toggle-nav-section" aria-expanded="true">
+              <span class="nav-section-label">Platform</span>
+              <svg class="icon nav-chevron"><use href="#i-chevron"></use></svg>
             </button>
-            <button class="nav-item" type="button" data-tab="backups">
-              <svg class="icon"><use href="#i-layers"></use></svg>
-              <span>Backups &amp; Settings</span>
-            </button>
-            <button class="nav-item" type="button" data-tab="security">
-              <svg class="icon"><use href="#i-shield"></use></svg>
-              <span>Security &amp; Keys</span>
-            </button>
-            <button class="nav-item" type="button" data-tab="platform">
-              <svg class="icon"><use href="#i-settings"></use></svg>
-              <span>Platform Admin</span>
-            </button>
-            <button class="nav-item" type="button" data-tab="docs">
-              <svg class="icon"><use href="#i-book"></use></svg>
-              <span>SDK, CLI &amp; Docs</span>
-            </button>
+            <div class="nav-section-items">
+              <button class="nav-item" type="button" data-tab="platform"><svg class="icon"><use href="#i-settings"></use></svg><span>Platform Admin</span></button>
+              <button class="nav-item" type="button" data-tab="docs"><svg class="icon"><use href="#i-book"></use></svg><span>SDK, CLI &amp; Docs</span></button>
             </div>
           </div>
         </div>
@@ -321,6 +306,8 @@
           </div>
         </div>
       </aside>
+
+      <aside id="context-menu" class="context-menu" aria-label="Contextual section navigation"></aside>
 
       <main id="main-content" class="main-content" tabindex="-1">
         <div id="empty-projects-state" class="workspace-empty hidden">
@@ -350,7 +337,7 @@
         <div id="page-root" class="page-root" aria-live="polite"></div>
 
         <footer class="workspace-footer">
-          <span><strong>MARI BASE</strong> Management Studio · v1.2</span>
+          <span><strong>MARI BASE</strong> Studio · <a href="/guide/" rel="noopener">Platform atlas &amp; phone guide</a> · Structured Edition</span>
           <span id="footer-runtime-summary">Self-hostable PostgreSQL backend platform</span>
         </footer>
       </main>

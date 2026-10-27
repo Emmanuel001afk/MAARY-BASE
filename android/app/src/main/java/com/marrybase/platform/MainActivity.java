@@ -207,7 +207,7 @@ public class MainActivity extends Activity {
         });
         presetRow.addView(emulatorChip);
 
-        Button localChip = createSecondarySmallButton("Localhost (4100)");
+        Button localChip = createSecondarySmallButton("Phone server (4100)");
         LinearLayout.LayoutParams localChipLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -219,6 +219,18 @@ public class MainActivity extends Activity {
         });
         presetRow.addView(localChip, localChipLp);
         card.addView(presetRow, presetLp);
+
+        TextView phoneServerHint = new TextView(this);
+        phoneServerHint.setText("Phone as server: run 'npm run start:phone' in Termux, then use http://127.0.0.1:4100 here. From another device use http://<phone-LAN-IP>:4100 on trusted Wi-Fi. Full guide: /guide/#phone-as-server on a running MARI BASE instance.");
+        phoneServerHint.setTextColor(Color.parseColor("#8FA3B6"));
+        phoneServerHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        phoneServerHint.setLineSpacing(dp(2), 1f);
+        LinearLayout.LayoutParams phoneHintLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        phoneHintLp.topMargin = dp(8);
+        card.addView(phoneServerHint, phoneHintLp);
 
         allowHttpCheck = new CheckBox(this);
         allowHttpCheck.setText("Allow cleartext HTTP for local / LAN development (HTTPS enforced for remote hosts)");

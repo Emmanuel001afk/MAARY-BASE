@@ -12,7 +12,9 @@ export const storageAdapter = {
   },
 };
 
-export const PROJECT_FREE_TABS = new Set(["organizations", "platform", "docs"]);
+export const PROJECT_FREE_TABS = new Set([
+  "organizations", "connect", "map", "platform", "docs",
+]);
 
 export const state = {
   user: null,
@@ -22,6 +24,7 @@ export const state = {
   projects: [],
   activeProject: null,
   activeTab: "overview",
+  activeContextKey: null,
   activeTable: null,
   activeBucket: null,
   tables: [],

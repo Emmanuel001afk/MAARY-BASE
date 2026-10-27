@@ -17,7 +17,8 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "check:studio": "node --check public/dashboard/app.js && node --check public/dashboard/js/core.js && node --check public/dashboard/js/pages.js && node --check public/dashboard/js/actions.js",
+    "start:phone": "bash scripts/phone-server.sh",
+    "check:studio": "node --check public/dashboard/app.js && node --check public/dashboard/js/core.js && node --check public/dashboard/js/navigation.js && node --check public/dashboard/js/pages.js && node --check public/dashboard/js/actions.js",
     "check:mobile": "node --check public/mobile/app.js && node --check public/mobile/config.js",
     "build": "npm run check:studio && npm run check:mobile && tsc -p tsconfig.json",
     "build:android": "tsx src/cli/index.ts apk build",

@@ -22,6 +22,7 @@
 | **Server Functions & Jobs** | Versioned ESM functions executed in isolated, permission-restricted child processes (`--permission`) with `envVars` and encrypted secrets; durable PostgreSQL job queue with retries, SSRF-guarded HTTP webhooks, and recurring schedules. |
 | **Observability & Backups** | Truthful live module status verification (`operational_verified`, `requires_configuration`, `unavailable`, `failed`), structured error logs, audit trails, Prometheus/JSON metrics, and v2 disaster-recovery snapshots with SHA-256 verification and safeguarded restore. |
 | **Android Companion (`android/`)** | Native Android client (`com.marrybase.platform`, SDK 34, Java 17, AGP 8.5.2) with `/ready` + `/v1/platform` verification, HTTPS enforcement for remote hosts, saved server URLs, connection recovery UI, and origin-locked hardened `WebView`. Compiled and signed via Gradle in `.github/workflows/ci.yml` and uploaded as a physical `.apk` workflow artifact. |
+| **Structured Studio & Connection Atlas** | A Supabase-inspired four-layer interface: scope topbar, grouped primary sidebar, data-driven contextual product menus, and focused workspaces. New **Connect** and **Structure map** pages, a public `/guide/` atlas, command-palette entries, Android/Web parity, and an in-Studio live readiness check. Every secondary menu item maps to a real page, local tab, or control. |
 
 ---
 
@@ -56,6 +57,29 @@ curl -f http://127.0.0.1:4100/ready
 ```
 
 When `NODE_ENV=production`, registering the very first Superadmin account requires supplying `PLATFORM_BOOTSTRAP_TOKEN` (either in the Studio registration screen's Bootstrap Token field or via the `x-platform-bootstrap-token` HTTP header).
+
+---
+
+## Studio Structure & Phone-as-Server Connection
+
+The Management Studio is no longer a flat, unexplained list of routes. It follows Supabase's readable information architecture while keeping MARI BASE's own backend and branding:
+
+1. **Top scope bar** — organization, project, health, quick navigation, theme, and operator identity.
+2. **Primary sidebar** — Workspace, Database, Products, Operate, and Platform groups.
+3. **Contextual product menu** — grouped submenus (Management, Access Control, Configuration, Tools, Platform) generated from `public/dashboard/js/navigation.js`.
+4. **Focused content** — a page header, local tabs, object lists, inspectors, forms, and tables.
+
+Open `/guide/` for the public visual atlas, or use **Workspace → Structure map** inside the signed-in Studio. The source-derived Supabase mapping is documented in [`docs/SUPABASE_STRUCTURE_MAPPING.md`](docs/SUPABASE_STRUCTURE_MAPPING.md).
+
+### Connect a phone
+
+- **Phone as client (recommended):** enter your server origin in `/mobile/` or the Android companion; the app verifies `/ready` and `/v1/platform` before opening the Studio. Use `https://...` for remote hosts.
+- **Android emulator:** use `http://10.0.2.2:4100` to reach a server on the host computer.
+- **Phone as actual server (local lab):** install Termux and Node 22+, clone this repository, run `npm ci`, then `npm run start:phone`. It binds to `0.0.0.0:4100` with embedded PGlite and prints both the loopback and LAN URLs.
+- **Same phone:** use `http://127.0.0.1:4100`. **Another device on trusted Wi-Fi:** use `http://<phone-LAN-IP>:4100` and enable cleartext HTTP only for local/LAN development.
+- **Remote:** use an HTTPS tunnel or reverse proxy with a valid certificate, replace all development secrets, restrict `CORS_ORIGIN`, and use external PostgreSQL for production.
+
+The complete step-by-step guide, troubleshooting table, and security rules are in [`docs/PHONE_AS_SERVER.md`](docs/PHONE_AS_SERVER.md) and at `/guide/#phone-as-server`.
 
 ---
 
@@ -103,3 +127,5 @@ npm run build          # Production build to dist/
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — System boundaries, multi-project PostgreSQL/RLS isolation, worker security, and Android architecture.
 - [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) — Complete HTTP & WebSocket API reference.
 - [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — Self-hosting operations, bootstrap security, backups/restore, monitoring, and upgrades.
+- [`docs/SUPABASE_STRUCTURE_MAPPING.md`](docs/SUPABASE_STRUCTURE_MAPPING.md) — Pinned Supabase Studio source research, visual hierarchy, menu and service/data mapping.
+- [`docs/PHONE_AS_SERVER.md`](docs/PHONE_AS_SERVER.md) — Phone-as-client, Android emulator, and Android/Termux phone-as-server connection guide.
