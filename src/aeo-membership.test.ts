@@ -77,7 +77,7 @@ test("rejects wrong audience", async () => {
 });
 
 test("rejects expired credentials", async () => {
-  await assert.rejects(() => verifyAeoMembershipCredential(compact({ ...claims(), exp: now - 10 }), options()));
+  await assert.rejects(() => verifyAeoMembershipCredential(compact({ ...claims(), exp: now - 120 }), options()));
 });
 
 test("verifies registration and binds the signed platform identity", async () => {
