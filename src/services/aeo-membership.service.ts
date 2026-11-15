@@ -258,3 +258,140 @@ export async function verifyAeoPeerRegistration(
     membership,
   });
 }
+
+
+export const AEO_TRUST_BUNDLE_TYP = "AEO-TRUST-BUNDLE+jwt" as const;
+export const AEO_TRUST_BUNDLE_AUDIENCE = "urn:aeo:trust-bundle" as const;
+
+export interface AeoPinnedRootKey {
+  kid: string;
+  issuer: "AEO";
+  algorithm: "Ed25519";
+  publicKey: Uint8Array | string;
+  notBefore?: number;
+  notAfter?: number;
+  revokedAt?: number;
+}
+
+export interface AeoTrustBundleVerificationOptions {
+  pinnedRootKeys: readonly AeoPinnedRootKey[];
+  minimumVersion?: number;
+  nowSeconds?: number;
+  clockSkewSeconds?: number;
+}
+
+export interface AeoVerifiedTrustBundle {
+  version: number;
+  issuedAt: number;
+  expiresAt: number;
+  trustedKeys: readonly AeoTrustedIssuerKey[];
+  revokedCredentialIds: readonly string[];
+}
+
+export function verifyAeoTrustBundle(
+  compact: string,
+  options: AeoTrustBundleVerificationOptions,
+): AeoVerifiedTrustBundle {
+  if (typeof compact !== "string" || !compact || compact.length > 65_536) {
+    fail("malformed_trust_bundle", "Trust bundle is missing or exceeds the size limit");
+  }
+  if (!options || !Array.isArray(options.pinnedRootKeys) || options.pinnedRootKeys.length === 0) {
+    fail("invalid_trust_config", "Pinned AEO root keys are required");
+  }
+  const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const skew = options.clockSkewSeconds ?? 60;
+  const minimumVersion = options.minimumVersion ?? 0;
+  if (!isInteger(now) || !isInteger(skew) || skew < 0 || skew > 300 ||
+      !isInteger(minimumVersion) || minimumVersion < 0) {
+    fail("invalid_trust_config", "Invalid trust-bundle verifier configuration");
+  }
+  const parts = compact.split(".");
+  if (parts.length !== 3 || parts.some((part) => !part)) {
+    fail("malformed_trust_bundle", "Trust bundle must be a three-part compact JWS");
+  }
+  const header = decodeJson(parts[0]!, "trust-bundle header");
+  const payload = decodeJson(parts[1]!, "trust-bundle payload");
+  if (header.alg !== "EdDSA" || header.typ !== AEO_TRUST_BUNDLE_TYP ||
+      typeof header.kid !== "string" || !/^[A-Za-z0-9._-]{1,128}$/.test(header.kid) ||
+      Object.keys(header).some((key) => !["alg", "typ", "kid"].includes(key))) {
+    fail("unsupported_trust_bundle_header", "Trust bundle does not match the AEO root-signature profile");
+  }
+  const roots = options.pinnedRootKeys.filter((candidate) => candidate.kid === header.kid);
+  if (roots.length !== 1) fail("untrusted_root_key", "Pinned AEO root key is missing or ambiguous");
+  const root = roots[0]!;
+  if (root.issuer !== "AEO" || root.algorithm !== "Ed25519" ||
+      (root.notBefore !== undefined && (!isInteger(root.notBefore) || now + skew < root.notBefore)) ||
+      (root.notAfter !== undefined && (!isInteger(root.notAfter) || now - skew > root.notAfter)) ||
+      (root.revokedAt !== undefined && (!isInteger(root.revokedAt) || now >= root.revokedAt)) ||
+      (root.notBefore !== undefined && root.notAfter !== undefined && root.notAfter <= root.notBefore)) {
+    fail("untrusted_root_key", "Pinned AEO root key is invalid, expired, or revoked");
+  }
+  if (payload.iss !== "AEO" || payload.aud !== AEO_TRUST_BUNDLE_AUDIENCE ||
+      payload.bundle_type !== "aeo-trust-bundle" || payload.bundle_version !== 1) {
+    fail("invalid_trust_bundle", "Trust bundle issuer, audience or profile version is invalid");
+  }
+  const version = payload.version;
+  const iat = payload.iat;
+  const nbf = payload.nbf;
+  const exp = payload.exp;
+  if (!isInteger(version) || version < 1 || version < minimumVersion ||
+      !isInteger(iat) || !isInteger(nbf) || !isInteger(exp) ||
+      exp <= iat || nbf < iat || nbf > exp || iat > now + skew ||
+      nbf > now + skew || exp <= now - skew || exp - iat > 7 * 24 * 60 * 60) {
+    fail("trust_bundle_time_or_version_invalid", "Trust bundle is expired, stale, or has an invalid lifetime/version");
+  }
+  const signature = decodeBase64Url(parts[2]!, "trust-bundle signature");
+  if (signature.length !== 64) fail("malformed_trust_bundle", "Ed25519 trust-bundle signature must be 64 bytes");
+  let valid: boolean;
+  try {
+    valid = verifySignature(
+      null,
+      Buffer.from(parts[0] + "." + parts[1], "ascii"),
+      importRawEd25519Key(root.publicKey),
+      signature,
+    );
+  } catch {
+    fail("crypto_unavailable", "Node.js Ed25519 trust-bundle verification is unavailable");
+  }
+  if (!valid) fail("invalid_trust_bundle_signature", "Trust bundle signature is invalid");
+  if (!Array.isArray(payload.keys) || payload.keys.length < 1 || payload.keys.length > 100) {
+    fail("invalid_trust_bundle", "Trust bundle must contain 1 to 100 issuer keys");
+  }
+  const seenKids = new Set<string>();
+  const trustedKeys = payload.keys.map((item) => {
+    if (!isRecord(item)) fail("invalid_trust_bundle", "Invalid issuer key record");
+    const kid = requiredString(item.kid, "issuer key ID", 128);
+    const issuer = requiredString(item.issuer, "issuer");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(kid) || seenKids.has(kid) || item.algorithm !== "Ed25519") {
+      fail("invalid_trust_bundle", "Issuer key ID is duplicated or its algorithm is unsupported");
+    }
+    seenKids.add(kid);
+    const publicKey = decodeBase64Url(requiredString(item.publicKey, "issuer public key", 128), "issuer public key");
+    if (publicKey.length !== 32) fail("invalid_trust_bundle", "Issuer Ed25519 public key must be 32 bytes");
+    for (const field of ["notBefore", "notAfter", "revokedAt"] as const) {
+      if (item[field] !== undefined && !isInteger(item[field])) fail("invalid_trust_bundle", "Invalid issuer key " + field);
+    }
+    if (item.notBefore !== undefined && item.notAfter !== undefined && item.notAfter <= item.notBefore) {
+      fail("invalid_trust_bundle", "Issuer key validity interval is invalid");
+    }
+    return Object.freeze({
+      kid, issuer, algorithm: "Ed25519" as const, publicKey,
+      ...(item.notBefore !== undefined ? { notBefore: item.notBefore as number } : {}),
+      ...(item.notAfter !== undefined ? { notAfter: item.notAfter as number } : {}),
+      ...(item.revokedAt !== undefined ? { revokedAt: item.revokedAt as number } : {}),
+    });
+  });
+  const revokedIds = payload.revokedCredentialIds ?? [];
+  if (!Array.isArray(revokedIds) || revokedIds.length > 10_000 ||
+      revokedIds.some((id) => typeof id !== "string" || !UUID_V4.test(id)) ||
+      new Set(revokedIds).size !== revokedIds.length) {
+    fail("invalid_trust_bundle", "Credential revocation list is invalid");
+  }
+  return Object.freeze({
+    version,
+    issuedAt: iat,
+    expiresAt: exp,
+    trustedKeys: Object.freeze(trustedKeys),
+    revokedCredentialIds: Object.freeze([...revokedIds as string[]]),
+  });
+}
