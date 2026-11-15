@@ -5,6 +5,9 @@ import {
   AEO_FRAMEWORK_AUDIENCE,
   AEO_MEMBERSHIP_TYP,
   AEO_UCCS_PROTOCOL,
+  AEO_TRUST_BUNDLE_TYP,
+  AEO_TRUST_BUNDLE_AUDIENCE,
+  verifyAeoTrustBundle,
   verifyAeoMembershipCredential,
   verifyAeoPeerRegistration,
   type AeoTrustedIssuerKey,
@@ -47,6 +50,59 @@ const options = (revoked = false, trustedKeys: AeoTrustedIssuerKey[] = [key]) =>
   trustedKeys,
   isCredentialRevoked: async () => revoked,
   nowSeconds: now,
+});
+
+
+const rootPair = generateKeyPairSync("ed25519");
+const rootPublic = rootPair.publicKey.export({ format: "der", type: "spki" }).subarray(-32);
+const pinnedRoot = {
+  kid: "aeo-root-test-01",
+  issuer: "AEO" as const,
+  algorithm: "Ed25519" as const,
+  publicKey: new Uint8Array(rootPublic),
+  notBefore: now - 10_000,
+  notAfter: now + 1_000_000,
+};
+function signedTrustBundle(version = 7) {
+  const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const header = b64({ alg: "EdDSA", typ: AEO_TRUST_BUNDLE_TYP, kid: pinnedRoot.kid });
+  const payload = b64({
+    iss: "AEO",
+    aud: AEO_TRUST_BUNDLE_AUDIENCE,
+    bundle_type: "aeo-trust-bundle",
+    bundle_version: 1,
+    version,
+    iat: now - 30,
+    nbf: now - 30,
+    exp: now + 86_370,
+    keys: [{
+      kid: key.kid,
+      issuer: key.issuer,
+      algorithm: "Ed25519",
+      publicKey: Buffer.from(rawPublic).toString("base64url"),
+      notBefore: now - 10_000,
+      notAfter: now + 1_000_000,
+    }],
+    revokedCredentialIds: [],
+  });
+  const input = header + "." + payload;
+  return input + "." + sign(null, Buffer.from(input, "ascii"), rootPair.privateKey).toString("base64url");
+}
+test("verifies a root-signed AEO trust bundle", () => {
+  const bundle = verifyAeoTrustBundle(signedTrustBundle(), {
+    pinnedRootKeys: [pinnedRoot],
+    nowSeconds: now,
+  });
+  assert.equal(bundle.version, 7);
+  assert.equal(bundle.trustedKeys[0]?.kid, key.kid);
+});
+test("rejects trust-bundle rollback and an unpinned root", () => {
+  assert.throws(() => verifyAeoTrustBundle(signedTrustBundle(7), {
+    pinnedRootKeys: [pinnedRoot], minimumVersion: 8, nowSeconds: now,
+  }));
+  assert.throws(() => verifyAeoTrustBundle(signedTrustBundle(), {
+    pinnedRootKeys: [], nowSeconds: now,
+  }));
 });
 
 test("accepts valid AEO membership credentials", async () => {
