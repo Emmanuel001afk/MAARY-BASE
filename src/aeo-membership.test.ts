@@ -21,7 +21,7 @@ const key: AeoTrustedIssuerKey = {
   notBefore: now - 10_000,
   notAfter: now + 1_000_000,
 };
-const claims = () => ({
+const claims = (): Record<string, unknown> => ({
   iss: key.issuer,
   aud: AEO_FRAMEWORK_AUDIENCE,
   ecosystem: "AEO",
