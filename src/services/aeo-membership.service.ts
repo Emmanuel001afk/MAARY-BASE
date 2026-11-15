@@ -371,7 +371,7 @@ export function verifyAeoTrustBundle(
     for (const field of ["notBefore", "notAfter", "revokedAt"] as const) {
       if (item[field] !== undefined && !isInteger(item[field])) fail("invalid_trust_bundle", "Invalid issuer key " + field);
     }
-    if (item.notBefore !== undefined && item.notAfter !== undefined && item.notAfter <= item.notBefore) {
+    if (typeof item.notBefore === "number" && typeof item.notAfter === "number" && item.notAfter <= item.notBefore) {
       fail("invalid_trust_bundle", "Issuer key validity interval is invalid");
     }
     return Object.freeze({
