@@ -45,7 +45,7 @@ function compact(payload = claims()) {
 }
 const options = (revoked = false, trustedKeys: AeoTrustedIssuerKey[] = [key]) => ({
   trustedKeys,
-  isCredentialRevoked: async () => !revoked,
+  isCredentialRevoked: async () => revoked,
   nowSeconds: now,
 });
 
