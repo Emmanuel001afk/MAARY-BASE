@@ -17,3 +17,8 @@ No private key, production issuer, trust root, credential, or revocation service
 ## Validation
 
 Node tests cover valid credentials, signature tampering, unknown keys, revocation, wrong audience, expiry, and registration identity binding. CI results must pass before this module is considered build-verified.
+
+
+## Root-signed trust bundles
+
+The service verifies trust bundles signed by a pinned AEO Ed25519 root, validates issuer-key records and the credential revocation list, and enforces expiry and a caller-supplied minimum version. Persist the highest accepted version outside this pure verifier and pass it as `minimumVersion` to prevent rollback. No production root, private key, issuer credential, or revocation service is provisioned here. Root rotation/recovery and live distribution remain production prerequisites.
