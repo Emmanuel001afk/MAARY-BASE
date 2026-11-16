@@ -154,7 +154,7 @@ test("verifies registration and binds the signed platform identity", async () =>
 
 
 test("accepts the shared AEO cross-platform trust, membership and registration vector", async () => {
-  const vector = JSON.parse(readFileSync(new URL("./fixtures/aeo-conformance-vectors-v1.json", import.meta.url), "utf8"));
+  const vector = JSON.parse(readFileSync("tests/fixtures/aeo-conformance-vectors-v1.json", "utf8"));
   const bundle = verifyAeoTrustBundle(vector.trustBundle, {
     pinnedRootKeys: vector.pinnedRootKeys,
     nowSeconds: vector.nowSeconds,
