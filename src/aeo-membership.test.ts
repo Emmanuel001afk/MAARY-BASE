@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import {
   AEO_FRAMEWORK_AUDIENCE,
   AEO_MEMBERSHIP_TYP,
@@ -149,4 +150,25 @@ test("verifies registration and binds the signed platform identity", async () =>
   await assert.rejects(() => verifyAeoPeerRegistration(
     { ...registration, displayName: "Different Platform" }, options(),
   ));
+});
+
+
+test("accepts the shared AEO cross-platform trust, membership and registration vector", async () => {
+  const vector = JSON.parse(readFileSync(new URL("./fixtures/aeo-conformance-vectors-v1.json", import.meta.url), "utf8"));
+  const bundle = verifyAeoTrustBundle(vector.trustBundle, {
+    pinnedRootKeys: vector.pinnedRootKeys,
+    nowSeconds: vector.nowSeconds,
+  });
+  assert.equal(bundle.version, vector.expected.trustBundleVersion);
+  assert.equal(bundle.trustedKeys[0]?.kid, vector.expected.issuerKeyId);
+  const options = {
+    trustedKeys: bundle.trustedKeys,
+    nowSeconds: vector.nowSeconds,
+    isCredentialRevoked: async ({ jti }: { issuer: string; jti: string; platformId: string }) =>
+      bundle.revokedCredentialIds.includes(jti),
+  };
+  const membership = await verifyAeoMembershipCredential(vector.membershipCredential, options);
+  assert.equal(membership.platformId, vector.expected.membershipPlatformId);
+  const registration = await verifyAeoPeerRegistration(vector.registration, options);
+  assert.equal(registration.platformId, vector.expected.membershipPlatformId);
 });
